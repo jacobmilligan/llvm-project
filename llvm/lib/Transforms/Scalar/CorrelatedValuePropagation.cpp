@@ -19,6 +19,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LazyValueInfo.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -193,15 +194,14 @@ static bool simplifyCommonValuePhi(PHINode *P, LazyValueInfo *LVI,
       return false;
   }
 
+  // LVI only guarantees that the value matches a certain constant if the value
+  // is not poison. Make sure we don't replace a well-defined value with poison.
+  // This is usually satisfied due to a prior branch on the value.
+  if (!isGuaranteedNotToBePoison(CommonValue, nullptr, P, DT))
+    return false;
+
   // All constant incoming values map to the same variable along the incoming
-  // edges of the phi. The phi is unnecessary. However, we must drop all
-  // poison-generating flags to ensure that no poison is propagated to the phi
-  // location by performing this substitution.
-  // Warning: If the underlying analysis changes, this may not be enough to
-  //          guarantee that poison is not propagated.
-  // TODO: We may be able to re-infer flags by re-analyzing the instruction.
-  if (auto *CommonInst = dyn_cast<Instruction>(CommonValue))
-    CommonInst->dropPoisonGeneratingFlags();
+  // edges of the phi. The phi is unnecessary.
   P->replaceAllUsesWith(CommonValue);
   P->eraseFromParent();
   ++NumPhiCommon;
@@ -690,7 +690,7 @@ static bool narrowSDivOrSRem(BinaryOperator *Instr, LazyValueInfo *LVI) {
 
   // sdiv/srem is UB if divisor is -1 and divident is INT_MIN, so unless we can
   // prove that such a combination is impossible, we need to bump the bitwidth.
-  if (CRs[1]->contains(APInt::getAllOnesValue(OrigWidth)) &&
+  if (CRs[1]->contains(APInt::getAllOnes(OrigWidth)) &&
       CRs[0]->contains(
           APInt::getSignedMinValue(MinSignedBits).sextOrSelf(OrigWidth)))
     ++MinSignedBits;
@@ -1023,49 +1023,48 @@ static bool runImpl(Function &F, LazyValueInfo *LVI, DominatorTree *DT,
   // blocks.
   for (BasicBlock *BB : depth_first(&F.getEntryBlock())) {
     bool BBChanged = false;
-    for (BasicBlock::iterator BI = BB->begin(), BE = BB->end(); BI != BE;) {
-      Instruction *II = &*BI++;
-      switch (II->getOpcode()) {
+    for (Instruction &II : llvm::make_early_inc_range(*BB)) {
+      switch (II.getOpcode()) {
       case Instruction::Select:
-        BBChanged |= processSelect(cast<SelectInst>(II), LVI);
+        BBChanged |= processSelect(cast<SelectInst>(&II), LVI);
         break;
       case Instruction::PHI:
-        BBChanged |= processPHI(cast<PHINode>(II), LVI, DT, SQ);
+        BBChanged |= processPHI(cast<PHINode>(&II), LVI, DT, SQ);
         break;
       case Instruction::ICmp:
       case Instruction::FCmp:
-        BBChanged |= processCmp(cast<CmpInst>(II), LVI);
+        BBChanged |= processCmp(cast<CmpInst>(&II), LVI);
         break;
       case Instruction::Load:
       case Instruction::Store:
-        BBChanged |= processMemAccess(II, LVI);
+        BBChanged |= processMemAccess(&II, LVI);
         break;
       case Instruction::Call:
       case Instruction::Invoke:
-        BBChanged |= processCallSite(cast<CallBase>(*II), LVI);
+        BBChanged |= processCallSite(cast<CallBase>(II), LVI);
         break;
       case Instruction::SRem:
       case Instruction::SDiv:
-        BBChanged |= processSDivOrSRem(cast<BinaryOperator>(II), LVI);
+        BBChanged |= processSDivOrSRem(cast<BinaryOperator>(&II), LVI);
         break;
       case Instruction::UDiv:
       case Instruction::URem:
-        BBChanged |= processUDivOrURem(cast<BinaryOperator>(II), LVI);
+        BBChanged |= processUDivOrURem(cast<BinaryOperator>(&II), LVI);
         break;
       case Instruction::AShr:
-        BBChanged |= processAShr(cast<BinaryOperator>(II), LVI);
+        BBChanged |= processAShr(cast<BinaryOperator>(&II), LVI);
         break;
       case Instruction::SExt:
-        BBChanged |= processSExt(cast<SExtInst>(II), LVI);
+        BBChanged |= processSExt(cast<SExtInst>(&II), LVI);
         break;
       case Instruction::Add:
       case Instruction::Sub:
       case Instruction::Mul:
       case Instruction::Shl:
-        BBChanged |= processBinOp(cast<BinaryOperator>(II), LVI);
+        BBChanged |= processBinOp(cast<BinaryOperator>(&II), LVI);
         break;
       case Instruction::And:
-        BBChanged |= processAnd(cast<BinaryOperator>(II), LVI);
+        BBChanged |= processAnd(cast<BinaryOperator>(&II), LVI);
         break;
       }
     }
@@ -1118,7 +1117,6 @@ CorrelatedValuePropagationPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!Changed) {
     PA = PreservedAnalyses::all();
   } else {
-    PA.preserve<GlobalsAA>();
     PA.preserve<DominatorTreeAnalysis>();
     PA.preserve<LazyValueAnalysis>();
   }

@@ -71,7 +71,8 @@ const ElementRegion *StoreManager::GetElementZeroRegion(const SubRegion *R,
   return MRMgr.getElementRegion(T, idx, R, Ctx);
 }
 
-const MemRegion *StoreManager::castRegion(const MemRegion *R, QualType CastToTy) {
+Optional<const MemRegion *> StoreManager::castRegion(const MemRegion *R,
+                                                     QualType CastToTy) {
   ASTContext &Ctx = StateMgr.getContext();
 
   // Handle casts to Objective-C objects.
@@ -83,12 +84,12 @@ const MemRegion *StoreManager::castRegion(const MemRegion *R, QualType CastToTy)
     // involved.  Blocks can be casted to/from 'id', as they can be treated
     // as Objective-C objects.  This could possibly be handled by enhancing
     // our reasoning of downcasts of symbolic objects.
-    if (isa<CodeTextRegion>(R) || isa<SymbolicRegion>(R))
+    if (isa<CodeTextRegion, SymbolicRegion>(R))
       return R;
 
     // We don't know what to make of it.  Return a NULL region, which
     // will be interpreted as UnknownVal.
-    return nullptr;
+    return None;
   }
 
   // Now assume we are casting from pointer to pointer. Other cases should
@@ -168,7 +169,7 @@ const MemRegion *StoreManager::castRegion(const MemRegion *R, QualType CastToTy)
       // If we cannot compute a raw offset, throw up our hands and return
       // a NULL MemRegion*.
       if (!baseR)
-        return nullptr;
+        return None;
 
       CharUnits off = rawOff.getOffset();
 
@@ -441,6 +442,19 @@ SVal StoreManager::getLValueIvar(const ObjCIvarDecl *decl, SVal base) {
 
 SVal StoreManager::getLValueElement(QualType elementType, NonLoc Offset,
                                     SVal Base) {
+
+  // Special case, if index is 0, return the same type as if
+  // this was not an array dereference.
+  if (Offset.isZeroConstant()) {
+    QualType BT = Base.getType(this->Ctx);
+    if (!BT.isNull() && !elementType.isNull()) {
+      QualType PointeeTy = BT->getPointeeType();
+      if (!PointeeTy.isNull() &&
+          PointeeTy.getCanonicalType() == elementType.getCanonicalType())
+        return Base;
+    }
+  }
+
   // If the base is an unknown or undefined value, just return it back.
   // FIXME: For absolute pointer addresses, we just return that value back as
   //  well, although in reality we should return the offset added to that

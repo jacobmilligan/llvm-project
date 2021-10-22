@@ -8,7 +8,7 @@
 
 #include "GDBRemoteCommunicationServerPlatform.h"
 
-#include <errno.h>
+#include <cerrno>
 
 #include <chrono>
 #include <csignal>
@@ -153,7 +153,8 @@ GDBRemoteCommunicationServerPlatform::GDBRemoteCommunicationServerPlatform(
 }
 
 // Destructor
-GDBRemoteCommunicationServerPlatform::~GDBRemoteCommunicationServerPlatform() {}
+GDBRemoteCommunicationServerPlatform::~GDBRemoteCommunicationServerPlatform() =
+    default;
 
 Status GDBRemoteCommunicationServerPlatform::LaunchGDBServer(
     const lldb_private::Args &args, std::string hostname, lldb::pid_t &pid,
@@ -198,7 +199,7 @@ Status GDBRemoteCommunicationServerPlatform::LaunchGDBServer(
   if (m_socket_protocol == Socket::ProtocolTcp) {
     llvm::StringRef platform_scheme;
     llvm::StringRef platform_ip;
-    int platform_port;
+    llvm::Optional<uint16_t> platform_port;
     llvm::StringRef platform_path;
     std::string platform_uri = GetConnection()->GetURI();
     bool ok = UriParser::Parse(platform_uri, platform_scheme, platform_ip,

@@ -584,6 +584,8 @@ llvm::json::Value toJSON(const DiagnosticRelatedInformation &DRI) {
   };
 }
 
+llvm::json::Value toJSON(DiagnosticTag Tag) { return static_cast<int>(Tag); }
+
 llvm::json::Value toJSON(const Diagnostic &D) {
   llvm::json::Object Diag{
       {"range", D.range},
@@ -602,6 +604,8 @@ llvm::json::Value toJSON(const Diagnostic &D) {
     Diag["relatedInformation"] = *D.relatedInformation;
   if (!D.data.empty())
     Diag["data"] = llvm::json::Object(D.data);
+  if (!D.tags.empty())
+    Diag["tags"] = llvm::json::Array{D.tags};
   // FIXME: workaround for older gcc/clang
   return std::move(Diag);
 }
@@ -808,10 +812,8 @@ llvm::json::Value toJSON(const DocumentSymbol &S) {
 }
 
 llvm::json::Value toJSON(const WorkspaceEdit &WE) {
-  if (!WE.changes)
-    return llvm::json::Object{};
   llvm::json::Object FileChanges;
-  for (auto &Change : *WE.changes)
+  for (auto &Change : WE.changes)
     FileChanges[Change.first] = llvm::json::Array(Change.second);
   return llvm::json::Object{{"changes", std::move(FileChanges)}};
 }
@@ -1075,6 +1077,7 @@ llvm::json::Value toJSON(const FileStatus &FStatus) {
 constexpr unsigned SemanticTokenEncodingSize = 5;
 static llvm::json::Value encodeTokens(llvm::ArrayRef<SemanticToken> Toks) {
   llvm::json::Array Result;
+  Result.reserve(SemanticTokenEncodingSize * Toks.size());
   for (const auto &Tok : Toks) {
     Result.push_back(Tok.deltaLine);
     Result.push_back(Tok.deltaStart);
@@ -1313,6 +1316,8 @@ llvm::json::Value toJSON(InlayHintKind K) {
   switch (K) {
   case InlayHintKind::ParameterHint:
     return "parameter";
+  case InlayHintKind::TypeHint:
+    return "type";
   }
   llvm_unreachable("Unknown clang.clangd.InlayHintKind");
 }
@@ -1320,6 +1325,14 @@ llvm::json::Value toJSON(InlayHintKind K) {
 llvm::json::Value toJSON(const InlayHint &H) {
   return llvm::json::Object{
       {"range", H.range}, {"kind", H.kind}, {"label", H.label}};
+}
+bool operator==(const InlayHint &A, const InlayHint &B) {
+  return std::tie(A.kind, A.range, A.label) ==
+         std::tie(B.kind, B.range, B.label);
+}
+bool operator<(const InlayHint &A, const InlayHint &B) {
+  return std::tie(A.kind, A.range, A.label) <
+         std::tie(B.kind, B.range, B.label);
 }
 
 static const char *toString(OffsetEncoding OE) {

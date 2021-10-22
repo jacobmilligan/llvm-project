@@ -1,4 +1,3 @@
-// -*- C++ -*-
 //===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -7,13 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-// REQUIRES: host-has-gdb
+// REQUIRES: host-has-gdb-with-python
+// REQUIRES: locale.en_US.UTF-8
 // UNSUPPORTED: libcpp-has-no-localization
 // UNSUPPORTED: c++03
 
 // RUN: %{cxx} %{flags} %s -o %t.exe %{compile_flags} -g %{link_flags}
 // Ensure locale-independence for unicode tests.
-// RUN: %{gdb} -nx -batch -iex "set autoload off" -ex "source %S/../../../utils/gdb/libcxx/printers.py" -ex "python register_libcxx_printer_loader()" -ex "source %S/gdb_pretty_printer_test.py" %t.exe
+// RUN: env LANG=en_US.UTF-8 %{gdb} -nx -batch -iex "set autoload off" -ex "source %S/../../../utils/gdb/libcxx/printers.py" -ex "python register_libcxx_printer_loader()" -ex "source %S/gdb_pretty_printer_test.py" %t.exe
 
 #include <bitset>
 #include <deque>
@@ -92,24 +92,28 @@ void MarkAsLive(Type &&) {}
 template <typename TypeToPrint> void ComparePrettyPrintToChars(
     TypeToPrint value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 template <typename TypeToPrint> void ComparePrettyPrintToRegex(
     TypeToPrint value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 void CompareExpressionPrettyPrintToChars(
     std::string value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 void CompareExpressionPrettyPrintToRegex(
     std::string value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
@@ -427,9 +431,9 @@ void multiset_test() {
 
 void vector_test() {
   std::vector<bool> test0 = {true, false};
-  ComparePrettyPrintToChars(test0,
+  ComparePrettyPrintToRegex(test0,
                             "std::vector<bool> of "
-                            "length 2, capacity 64 = {1, 0}");
+                            "length 2, capacity (32|64) = {1, 0}");
   for (int i = 0; i < 31; ++i) {
     test0.push_back(true);
     test0.push_back(false);
@@ -444,9 +448,9 @@ void vector_test() {
   ComparePrettyPrintToRegex(
       test0,
       "std::vector<bool> of length 65, "
-      "capacity 128 = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, "
-      "1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, "
-      "1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}");
+      "capacity (96|128) = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, "
+      "0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, "
+      "0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}");
 
   std::vector<int> test1;
   ComparePrettyPrintToChars(test1, "std::vector of length 0, capacity 0");
@@ -655,6 +659,7 @@ int main(int, char**) {
   string_test();
   a_namespace::string_view_test();
 
+  //u16string_test();
   u32string_test();
   tuple_test();
   unique_ptr_test();

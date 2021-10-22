@@ -22,9 +22,9 @@ void func() {
   const char *literal = "Hello, world!";
 }
 
-// ASAN: sectioned_global{{.*}} global { i32, [60 x i8] }{{.*}}, align 32
+// ASAN: sectioned_global{{.*}} global { i32, [28 x i8] }{{.*}}, align 32
 // KASAN: sectioned_global{{.*}} global i32
-// ASAN: @__special_global{{.*}} global { i32, [60 x i8] }{{.*}}, align 32
+// ASAN: @__special_global{{.*}} global { i32, [28 x i8] }{{.*}}, align 32
 // KASAN: @__special_global{{.*}} global i32
 
 /// Without -fasynchronous-unwind-tables, ctor and dtor get the uwtable attribute.
@@ -45,7 +45,7 @@ void func() {
 
 /// If -fasynchronous-unwind-tables, set the module flag "uwtable". ctor/dtor
 /// will thus get the uwtable attribute.
-// RUN: %clang_cc1 -emit-llvm -fsanitize=address -munwind-tables -o - %s | FileCheck %s --check-prefixes=UWTABLE
+// RUN: %clang_cc1 -emit-llvm -fsanitize=address -funwind-tables=2 -o - %s | FileCheck %s --check-prefixes=UWTABLE
 // UWTABLE: define internal void @asan.module_dtor() #[[#ATTR:]] {
 // UWTABLE: attributes #[[#ATTR]] = { nounwind uwtable }
 // UWTABLE: ![[#]] = !{i32 7, !"uwtable", i32 1}

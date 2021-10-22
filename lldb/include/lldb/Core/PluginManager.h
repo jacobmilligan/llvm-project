@@ -19,8 +19,8 @@
 #include "lldb/lldb-private-interfaces.h"
 #include "llvm/ADT/StringRef.h"
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
 #define LLDB_PLUGIN_DEFINE_ADV(ClassName, PluginName)                          \
   namespace lldb_private {                                                     \
@@ -54,7 +54,7 @@ public:
   static void Terminate();
 
   // ABI
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              ABICreateInstance create_callback);
 
   static bool UnregisterPlugin(ABICreateInstance create_callback);
@@ -62,7 +62,7 @@ public:
   static ABICreateInstance GetABICreateCallbackAtIndex(uint32_t idx);
 
   // Architecture
-  static void RegisterPlugin(ConstString name, llvm::StringRef description,
+  static void RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              ArchitectureCreateInstance create_callback);
 
   static void UnregisterPlugin(ArchitectureCreateInstance create_callback);
@@ -71,7 +71,7 @@ public:
   CreateArchitectureInstance(const ArchSpec &arch);
 
   // Disassembler
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              DisassemblerCreateInstance create_callback);
 
   static bool UnregisterPlugin(DisassemblerCreateInstance create_callback);
@@ -80,7 +80,7 @@ public:
   GetDisassemblerCreateCallbackAtIndex(uint32_t idx);
 
   static DisassemblerCreateInstance
-  GetDisassemblerCreateCallbackForPluginName(ConstString name);
+  GetDisassemblerCreateCallbackForPluginName(llvm::StringRef name);
 
   // DynamicLoader
   static bool
@@ -121,7 +121,7 @@ public:
   GetEmulateInstructionCreateCallbackForPluginName(ConstString name);
 
   // OperatingSystem
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              OperatingSystemCreateInstance create_callback,
                              DebuggerInitializeCallback debugger_init_callback);
 
@@ -131,7 +131,7 @@ public:
   GetOperatingSystemCreateCallbackAtIndex(uint32_t idx);
 
   static OperatingSystemCreateInstance
-  GetOperatingSystemCreateCallbackForPluginName(ConstString name);
+  GetOperatingSystemCreateCallbackForPluginName(llvm::StringRef name);
 
   // Language
   static bool RegisterPlugin(ConstString name, const char *description,
@@ -170,7 +170,7 @@ public:
 
   // ObjectFile
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  ObjectFileCreateInstance create_callback,
                  ObjectFileCreateMemoryInstance create_memory_callback,
                  ObjectFileGetModuleSpecifications get_module_specifications,
@@ -188,14 +188,16 @@ public:
   GetObjectFileGetModuleSpecificationsCallbackAtIndex(uint32_t idx);
 
   static ObjectFileCreateMemoryInstance
-  GetObjectFileCreateMemoryCallbackForPluginName(ConstString name);
+  GetObjectFileCreateMemoryCallbackForPluginName(llvm::StringRef name);
 
   static Status SaveCore(const lldb::ProcessSP &process_sp,
-                         const FileSpec &outfile);
+                         const FileSpec &outfile,
+                         lldb::SaveCoreStyle &core_style,
+                         llvm::StringRef plugin_name);
 
   // ObjectContainer
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  ObjectContainerCreateInstance create_callback,
                  ObjectFileGetModuleSpecifications get_module_specifications);
 
@@ -367,6 +369,28 @@ public:
   ///     An empty \a StringRef if the index is greater than or equal to the
   ///     number plugins, otherwise the actual schema is returned.
   static llvm::StringRef GetTraceSchema(size_t index);
+
+  // TraceExporter
+
+  /// \param[in] create_thread_trace_export_command
+  ///     This callback is used to create a CommandObject that will be listed
+  ///     under "thread trace export". Can be \b null.
+  static bool RegisterPlugin(
+      ConstString name, const char *description,
+      TraceExporterCreateInstance create_callback,
+      ThreadTraceExportCommandCreator create_thread_trace_export_command);
+
+  static TraceExporterCreateInstance
+  GetTraceExporterCreateCallback(ConstString plugin_name);
+
+  static bool UnregisterPlugin(TraceExporterCreateInstance create_callback);
+
+  static const char *GetTraceExporterPluginNameAtIndex(uint32_t index);
+
+  /// Return the callback used to create the CommandObject that will be listed
+  /// under "thread trace export". Can be \b null.
+  static ThreadTraceExportCommandCreator
+  GetThreadTraceExportCommandCreatorAtIndex(uint32_t index);
 
   // UnwindAssembly
   static bool RegisterPlugin(ConstString name, const char *description,

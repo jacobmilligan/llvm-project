@@ -1147,6 +1147,8 @@ FailureOr<Block *> ConversionPatternRewriterImpl::convertBlockSignature(
                        block, converter, *conversion, mapping, argReplacements)
                  : argConverter.convertSignature(block, converter, mapping,
                                                  argReplacements);
+  if (failed(result))
+    return failure();
   if (Block *newBlock = result.getValue()) {
     if (newBlock != block)
       blockActions.push_back(BlockAction::getTypeConversion(newBlock));
@@ -1484,7 +1486,10 @@ void ConversionPatternRewriter::cancelRootUpdate(Operation *op) {
   auto stateHasOp = [op](const auto &it) { return it.getOperation() == op; };
   auto &rootUpdates = impl->rootUpdates;
   auto it = llvm::find_if(llvm::reverse(rootUpdates), stateHasOp);
-  rootUpdates.erase(rootUpdates.begin() + (rootUpdates.rend() - it));
+  assert(it != rootUpdates.rend() && "no root update started on op");
+  (*it).resetOperation();
+  int updateIdx = std::prev(rootUpdates.rend()) - it;
+  rootUpdates.erase(rootUpdates.begin() + updateIdx);
 }
 
 /// PatternRewriter hook for notifying match failure reasons.
@@ -1648,7 +1653,13 @@ OperationLegalizer::OperationLegalizer(ConversionTarget &targetInfo,
 
 bool OperationLegalizer::isIllegal(Operation *op) const {
   // Check if the target explicitly marked this operation as illegal.
-  return target.getOpAction(op->getName()) == LegalizationAction::Illegal;
+  if (auto info = target.getOpAction(op->getName())) {
+    if (*info == LegalizationAction::Dynamic)
+      return !target.isLegal(op);
+    return *info == LegalizationAction::Illegal;
+  }
+
+  return false;
 }
 
 LogicalResult
@@ -2049,7 +2060,7 @@ void OperationLegalizer::computeLegalizationGraphBenefit(
       orderedPatternList = anyOpLegalizerPatterns;
 
     // If the pattern is not found, then it was removed and cannot be matched.
-    auto it = llvm::find(orderedPatternList, &pattern);
+    auto *it = llvm::find(orderedPatternList, &pattern);
     if (it == orderedPatternList.end())
       return PatternBenefit::impossibleToMatch();
 
@@ -2628,15 +2639,15 @@ struct FunctionLikeSignatureConversion : public ConversionPattern {
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    FunctionType type = mlir::impl::getFunctionType(op);
+    FunctionType type = function_like_impl::getFunctionType(op);
 
     // Convert the original function types.
     TypeConverter::SignatureConversion result(type.getNumInputs());
     SmallVector<Type, 1> newResults;
     if (failed(typeConverter->convertSignatureArgs(type.getInputs(), result)) ||
         failed(typeConverter->convertTypes(type.getResults(), newResults)) ||
-        failed(rewriter.convertRegionTypes(&mlir::impl::getFunctionBody(op),
-                                           *typeConverter, &result)))
+        failed(rewriter.convertRegionTypes(
+            &function_like_impl::getFunctionBody(op), *typeConverter, &result)))
       return failure();
 
     // Update the function signature in-place.
@@ -2644,7 +2655,7 @@ struct FunctionLikeSignatureConversion : public ConversionPattern {
                                      result.getConvertedTypes(), newResults);
 
     rewriter.updateRootInPlace(
-        op, [&] { mlir::impl::setFunctionType(op, newType); });
+        op, [&] { function_like_impl::setFunctionType(op, newType); });
 
     return success();
   }
@@ -2670,7 +2681,7 @@ void mlir::populateFuncOpTypeConversionPattern(RewritePatternSet &patterns,
 /// Register a legality action for the given operation.
 void ConversionTarget::setOpAction(OperationName op,
                                    LegalizationAction action) {
-  legalOperations[op] = {action, /*isRecursivelyLegal=*/false, llvm::None};
+  legalOperations[op].action = action;
 }
 
 /// Register a legality action for the given dialects.
@@ -2698,11 +2709,12 @@ auto ConversionTarget::isLegal(Operation *op) const
 
   // Returns true if this operation instance is known to be legal.
   auto isOpLegal = [&] {
-    // Handle dynamic legality either with the provided legality function, or
-    // the default hook on the derived instance.
-    if (info->action == LegalizationAction::Dynamic)
-      return info->legalityFn ? (*info->legalityFn)(op)
-                              : isDynamicallyLegal(op);
+    // Handle dynamic legality either with the provided legality function.
+    if (info->action == LegalizationAction::Dynamic) {
+      Optional<bool> result = info->legalityFn(op);
+      if (result)
+        return *result;
+    }
 
     // Otherwise, the operation is only legal if it was marked 'Legal'.
     return info->action == LegalizationAction::Legal;
@@ -2714,12 +2726,30 @@ auto ConversionTarget::isLegal(Operation *op) const
   LegalOpDetails legalityDetails;
   if (info->isRecursivelyLegal) {
     auto legalityFnIt = opRecursiveLegalityFns.find(op->getName());
-    if (legalityFnIt != opRecursiveLegalityFns.end())
-      legalityDetails.isRecursivelyLegal = legalityFnIt->second(op);
-    else
+    if (legalityFnIt != opRecursiveLegalityFns.end()) {
+      legalityDetails.isRecursivelyLegal =
+          legalityFnIt->second(op).getValueOr(true);
+    } else {
       legalityDetails.isRecursivelyLegal = true;
+    }
   }
   return legalityDetails;
+}
+
+static ConversionTarget::DynamicLegalityCallbackFn composeLegalityCallbacks(
+    ConversionTarget::DynamicLegalityCallbackFn oldCallback,
+    ConversionTarget::DynamicLegalityCallbackFn newCallback) {
+  if (!oldCallback)
+    return newCallback;
+
+  auto chain = [oldCl = std::move(oldCallback), newCl = std::move(newCallback)](
+                   Operation *op) -> Optional<bool> {
+    if (Optional<bool> result = newCl(op))
+      return *result;
+
+    return oldCl(op);
+  };
+  return chain;
 }
 
 /// Set the dynamic legality callback for the given operation.
@@ -2730,7 +2760,8 @@ void ConversionTarget::setLegalityCallback(
   assert(infoIt != legalOperations.end() &&
          infoIt->second.action == LegalizationAction::Dynamic &&
          "expected operation to already be marked as dynamically legal");
-  infoIt->second.legalityFn = callback;
+  infoIt->second.legalityFn =
+      composeLegalityCallbacks(std::move(infoIt->second.legalityFn), callback);
 }
 
 /// Set the recursive legality callback for the given operation and mark the
@@ -2743,7 +2774,8 @@ void ConversionTarget::markOpRecursivelyLegal(
          "expected operation to already be marked as legal");
   infoIt->second.isRecursivelyLegal = true;
   if (callback)
-    opRecursiveLegalityFns[name] = callback;
+    opRecursiveLegalityFns[name] = composeLegalityCallbacks(
+        std::move(opRecursiveLegalityFns[name]), callback);
   else
     opRecursiveLegalityFns.erase(name);
 }
@@ -2753,7 +2785,15 @@ void ConversionTarget::setLegalityCallback(
     ArrayRef<StringRef> dialects, const DynamicLegalityCallbackFn &callback) {
   assert(callback && "expected valid legality callback");
   for (StringRef dialect : dialects)
-    dialectLegalityFns[dialect] = callback;
+    dialectLegalityFns[dialect] = composeLegalityCallbacks(
+        std::move(dialectLegalityFns[dialect]), callback);
+}
+
+/// Set the dynamic legality callback for the unknown ops.
+void ConversionTarget::setLegalityCallback(
+    const DynamicLegalityCallbackFn &callback) {
+  assert(callback && "expected valid legality callback");
+  unknownLegalityFn = composeLegalityCallbacks(unknownLegalityFn, callback);
 }
 
 /// Get the legalization information for the given operation.
@@ -2766,7 +2806,7 @@ auto ConversionTarget::getOpInfo(OperationName op) const
   // Check for info for the parent dialect.
   auto dialectIt = legalDialects.find(op.getDialectNamespace());
   if (dialectIt != legalDialects.end()) {
-    Optional<DynamicLegalityCallbackFn> callback;
+    DynamicLegalityCallbackFn callback;
     auto dialectFn = dialectLegalityFns.find(op.getDialectNamespace());
     if (dialectFn != dialectLegalityFns.end())
       callback = dialectFn->second;
@@ -2774,7 +2814,7 @@ auto ConversionTarget::getOpInfo(OperationName op) const
                             callback};
   }
   // Otherwise, check if we mark unknown operations as dynamic.
-  if (unknownOpsDynamicallyLegal)
+  if (unknownLegalityFn)
     return LegalizationInfo{LegalizationAction::Dynamic,
                             /*isRecursivelyLegal=*/false, unknownLegalityFn};
   return llvm::None;

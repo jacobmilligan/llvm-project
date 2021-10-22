@@ -179,6 +179,36 @@ void testBitwiseRules(unsigned int a, int b, int c) {
   }
 }
 
+unsigned reset();
+
+void testCombinedSources(unsigned a, unsigned b) {
+  if (b >= 10 && (a | b) <= 30) {
+    // Check that we can merge constraints from (a | b), a, and b.
+    // Because of the order of assumptions, we already know that (a | b) is [10, 30].
+    clang_analyzer_eval((a | b) >= 10 && (a | b) <= 30); // expected-warning{{TRUE}}
+  }
+
+  a = reset();
+  b = reset();
+
+  if ((a | b) <= 30 && b >= 10) {
+    // Check that we can merge constraints from (a | b), a, and b.
+    // At this point, we know that (a | b) is [0, 30], but the knowledge
+    // of b >= 10 added later can help us to refine it and change it to [10, 30].
+    clang_analyzer_eval(10 <= (a | b) && (a | b) <= 30); // expected-warning{{TRUE}}
+  }
+
+  a = reset();
+  b = reset();
+
+  unsigned c = (a | b) & (a != b);
+  if (c <= 40 && a == b) {
+    // Even though we have a directo constraint for c [0, 40],
+    // we can get a more precise range by looking at the expression itself.
+    clang_analyzer_eval(c == 0); // expected-warning{{TRUE}}
+  }
+}
+
 void testRemainderRules(unsigned int a, unsigned int b, int c, int d) {
   // Check that we know that remainder of zero divided by any number is still 0.
   clang_analyzer_eval((0 % c) == 0); // expected-warning{{TRUE}}
@@ -249,5 +279,51 @@ void testRemainderRules(unsigned int a, unsigned int b, int c, int d) {
   unsigned int x = INT_MIN;
   if (a >= x && a <= x + 10) {
     clang_analyzer_eval((b % a) < x + 10); // expected-warning{{TRUE}}
+  }
+}
+
+void testDisequalityRules(unsigned int u1, unsigned int u2, int s1, int s2) {
+  // Checks when ranges are not overlapping
+  if (u1 <= 10 && u2 >= 20) {
+    // u1: [0,10], u2: [20,UINT_MAX]
+    clang_analyzer_eval((u1 != u2) != 0); // expected-warning{{TRUE}}
+  }
+
+  if (s1 <= INT_MIN + 10 && s2 >= INT_MAX - 10) {
+    // s1: [INT_MIN,INT_MIN + 10], s2: [INT_MAX - 10,INT_MAX]
+    clang_analyzer_eval((s1 != s2) == 0); // expected-warning{{FALSE}}
+  }
+
+  // Checks when ranges are completely overlapping and have more than one point
+  if (u1 >= 20 && u1 <= 50 && u2 >= 20 && u2 <= 50) {
+    // u1: [20,50], u2: [20,50]
+    clang_analyzer_eval((u1 != u2) != 0); // expected-warning{{UNKNOWN}}
+  }
+
+  if (s1 >= -20 && s1 <= 20 && s2 >= -20 && s2 <= 20) {
+    // s1: [-20,20], s2: [-20,20]
+    clang_analyzer_eval((s1 != s2) != 0); // expected-warning{{UNKNOWN}}
+  }
+
+  // Checks when ranges are partially overlapping
+  if (u1 >= 100 && u1 <= 200 && u2 >= 150 && u2 <= 300) {
+    // u1: [100,200], u2: [150,300]
+    clang_analyzer_eval((u1 != u2) != 0); // expected-warning{{UNKNOWN}}
+  }
+
+  if (s1 >= -80 && s1 <= -50 && s2 >= -100 && s2 <= -75) {
+    // s1: [-80,-50], s2: [-100,-75]
+    clang_analyzer_eval((s1 != s2) == 0); // expected-warning{{UNKNOWN}}
+  }
+
+  // Checks for ranges which are subset of one-another
+  if (u1 >= 500 && u1 <= 1000 && u2 >= 750 && u2 <= 1000) {
+    // u1: [500,1000], u2: [750,1000]
+    clang_analyzer_eval((u1 != u2) == 0); // expected-warning{{UNKNOWN}}
+  }
+
+  if (s1 >= -1000 && s1 <= -500 && s2 <= -500 && s2 >= -750) {
+    // s1: [-1000,-500], s2: [-500,-750]
+    clang_analyzer_eval((s1 != s2) == 0); // expected-warning{{UNKNOWN}}
   }
 }

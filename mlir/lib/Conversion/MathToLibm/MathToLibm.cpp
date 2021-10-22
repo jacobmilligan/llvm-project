@@ -9,6 +9,7 @@
 #include "mlir/Conversion/MathToLibm/MathToLibm.h"
 
 #include "../PassDetail.h"
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
@@ -61,7 +62,7 @@ VecOpToScalarOp<Op>::matchAndRewrite(Op op, PatternRewriter &rewriter) const {
   if (shape.size() != 1)
     return failure();
 
-  Value result = rewriter.create<ConstantOp>(
+  Value result = rewriter.create<arith::ConstantOp>(
       loc, DenseElementsAttr::get(
                vecType, FloatAttr::get(vecType.getElementType(), 0.0)));
   for (auto i = 0; i < shape.front(); ++i) {
@@ -81,30 +82,30 @@ template <typename Op>
 LogicalResult
 ScalarOpToLibmCall<Op>::matchAndRewrite(Op op,
                                         PatternRewriter &rewriter) const {
-  auto module = op->template getParentOfType<ModuleOp>();
+  auto module = SymbolTable::getNearestSymbolTable(op);
   auto type = op.getType();
   // TODO: Support Float16 by upcasting to Float32
   if (!type.template isa<Float32Type, Float64Type>())
     return failure();
 
   auto name = type.getIntOrFloatBitWidth() == 64 ? doubleFunc : floatFunc;
-  auto opFunc = module.template lookupSymbol<FuncOp>(name);
+  auto opFunc = dyn_cast_or_null<SymbolOpInterface>(
+      SymbolTable::lookupSymbolIn(module, name));
   // Forward declare function if it hasn't already been
   if (!opFunc) {
     OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(module.getBody());
+    rewriter.setInsertionPointToStart(&module->getRegion(0).front());
     auto opFunctionTy = FunctionType::get(
         rewriter.getContext(), op->getOperandTypes(), op->getResultTypes());
     opFunc =
         rewriter.create<FuncOp>(rewriter.getUnknownLoc(), name, opFunctionTy);
     opFunc.setPrivate();
   }
-  assert(opFunc.getType().template cast<FunctionType>().getResults() ==
-         op->getResultTypes());
-  assert(opFunc.getType().template cast<FunctionType>().getInputs() ==
-         op->getOperandTypes());
+  assert(SymbolTable::lookupSymbolIn(module, name)
+             ->template hasTrait<mlir::OpTrait::FunctionLike>());
 
-  rewriter.replaceOpWithNewOp<CallOp>(op, opFunc, op->getOperands());
+  rewriter.replaceOpWithNewOp<CallOp>(op, name, op.getType(),
+                                      op->getOperands());
 
   return success();
 }
@@ -135,8 +136,8 @@ void ConvertMathToLibmPass::runOnOperation() {
   populateMathToLibmConversionPatterns(patterns, /*benefit=*/1);
 
   ConversionTarget target(getContext());
-  target.addLegalDialect<BuiltinDialect, StandardOpsDialect,
-                         vector::VectorDialect>();
+  target.addLegalDialect<arith::ArithmeticDialect, BuiltinDialect,
+                         StandardOpsDialect, vector::VectorDialect>();
   target.addIllegalDialect<math::MathDialect>();
   if (failed(applyPartialConversion(module, target, std::move(patterns))))
     signalPassFailure();

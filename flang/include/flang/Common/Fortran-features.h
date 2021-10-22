@@ -30,7 +30,8 @@ ENUM_CLASS(LanguageFeature, BackslashEscapes, OldDebugLines,
     EquivalenceNumericWithCharacter, AdditionalIntrinsics, AnonymousParents,
     OldLabelDoEndStatements, LogicalIntegerAssignment, EmptySourceFile,
     ProgramReturn, ImplicitNoneTypeNever, ImplicitNoneTypeAlways,
-    ForwardRefDummyImplicitNone)
+    ForwardRefDummyImplicitNone, OpenAccessAppend, BOZAsDefaultInteger,
+    DistinguishableSpecifics)
 
 using LanguageFeatures = EnumSet<LanguageFeature, LanguageFeature_enumSize>;
 

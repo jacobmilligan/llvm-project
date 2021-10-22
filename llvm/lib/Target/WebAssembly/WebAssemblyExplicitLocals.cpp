@@ -239,8 +239,10 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
     Changed = true;
   }
 
-  // Start assigning local numbers after the last parameter.
+  // Start assigning local numbers after the last parameter and after any
+  // already-assigned locals.
   unsigned CurLocal = static_cast<unsigned>(MFI.getParams().size());
+  CurLocal += static_cast<unsigned>(MFI.getLocals().size());
 
   // Precompute the set of registers that are unused, so that we can insert
   // drops to their defs.
@@ -250,8 +252,7 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
 
   // Visit each instruction in the function.
   for (MachineBasicBlock &MBB : MF) {
-    for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end(); I != E;) {
-      MachineInstr &MI = *I++;
+    for (MachineInstr &MI : llvm::make_early_inc_range(MBB)) {
       assert(!WebAssembly::isArgument(MI.getOpcode()));
 
       if (MI.isDebugInstr() || MI.isLabel())

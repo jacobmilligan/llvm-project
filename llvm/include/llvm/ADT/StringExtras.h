@@ -13,6 +13,7 @@
 #ifndef LLVM_ADT_STRINGEXTRAS_H
 #define LLVM_ADT_STRINGEXTRAS_H
 
+#include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
@@ -296,6 +297,17 @@ inline std::string itostr(int64_t X) {
     return utostr(static_cast<uint64_t>(X));
 }
 
+inline std::string toString(const APInt &I, unsigned Radix, bool Signed,
+                            bool formatAsCLiteral = false) {
+  SmallString<40> S;
+  I.toString(S, Radix, Signed, formatAsCLiteral);
+  return std::string(S.str());
+}
+
+inline std::string toString(const APSInt &I, unsigned Radix) {
+  return toString(I, Radix, I.isSigned());
+}
+
 /// StrInStrNoCase - Portable version of strcasestr.  Locates the first
 /// occurrence of string 's1' in string 's2', ignoring case.  Returns
 /// the offset of s2 in s1 or npos if s2 cannot be found.
@@ -488,6 +500,83 @@ public:
     return Separator;
   }
 };
+
+/// A forward iterator over partitions of string over a separator.
+class SplittingIterator
+    : public iterator_facade_base<SplittingIterator, std::forward_iterator_tag,
+                                  StringRef> {
+  char SeparatorStorage;
+  StringRef Current;
+  StringRef Next;
+  StringRef Separator;
+
+public:
+  SplittingIterator(StringRef Str, StringRef Separator)
+      : Next(Str), Separator(Separator) {
+    ++*this;
+  }
+
+  SplittingIterator(StringRef Str, char Separator)
+      : SeparatorStorage(Separator), Next(Str),
+        Separator(&SeparatorStorage, 1) {
+    ++*this;
+  }
+
+  SplittingIterator(const SplittingIterator &R)
+      : SeparatorStorage(R.SeparatorStorage), Current(R.Current), Next(R.Next),
+        Separator(R.Separator) {
+    if (R.Separator.data() == &R.SeparatorStorage)
+      Separator = StringRef(&SeparatorStorage, 1);
+  }
+
+  SplittingIterator &operator=(const SplittingIterator &R) {
+    if (this == &R)
+      return *this;
+
+    SeparatorStorage = R.SeparatorStorage;
+    Current = R.Current;
+    Next = R.Next;
+    Separator = R.Separator;
+    if (R.Separator.data() == &R.SeparatorStorage)
+      Separator = StringRef(&SeparatorStorage, 1);
+    return *this;
+  }
+
+  bool operator==(const SplittingIterator &R) const {
+    assert(Separator == R.Separator);
+    return Current.data() == R.Current.data();
+  }
+
+  const StringRef &operator*() const { return Current; }
+
+  StringRef &operator*() { return Current; }
+
+  SplittingIterator &operator++() {
+    std::tie(Current, Next) = Next.split(Separator);
+    return *this;
+  }
+};
+
+/// Split the specified string over a separator and return a range-compatible
+/// iterable over its partitions.  Used to permit conveniently iterating
+/// over separated strings like so:
+///
+/// \code
+///   for (StringRef x : llvm::split("foo,bar,baz", ","))
+///     ...;
+/// \end
+///
+/// Note that the passed string must remain valid throuhgout lifetime
+/// of the iterators.
+inline iterator_range<SplittingIterator> split(StringRef Str, StringRef Separator) {
+  return {SplittingIterator(Str, Separator),
+          SplittingIterator(StringRef(), Separator)};
+}
+
+inline iterator_range<SplittingIterator> split(StringRef Str, char Separator) {
+  return {SplittingIterator(Str, Separator),
+          SplittingIterator(StringRef(), Separator)};
+}
 
 } // end namespace llvm
 

@@ -405,6 +405,25 @@ TEST(VPBasicBlockTest, TraversingIteratorTest) {
     EXPECT_EQ(R2BB2, FromIterator[6]);
     EXPECT_EQ(R1BB3, FromIterator[7]);
 
+    // const VPBasicBlocks only.
+    FromIterator.clear();
+    copy(VPBlockUtils::blocksOnly<const VPBasicBlock>(depth_first(Start)),
+         std::back_inserter(FromIterator));
+    EXPECT_EQ(6u, FromIterator.size());
+    EXPECT_EQ(R1BB1, FromIterator[0]);
+    EXPECT_EQ(R1BB2, FromIterator[1]);
+    EXPECT_EQ(R1BB4, FromIterator[2]);
+    EXPECT_EQ(R2BB1, FromIterator[3]);
+    EXPECT_EQ(R2BB2, FromIterator[4]);
+    EXPECT_EQ(R1BB3, FromIterator[5]);
+
+    // VPRegionBlocks only.
+    SmallVector<VPRegionBlock *> FromIteratorVPRegion(
+        VPBlockUtils::blocksOnly<VPRegionBlock>(depth_first(Start)));
+    EXPECT_EQ(2u, FromIteratorVPRegion.size());
+    EXPECT_EQ(R1, FromIteratorVPRegion[0]);
+    EXPECT_EQ(R2, FromIteratorVPRegion[1]);
+
     // Post-order.
     FromIterator.clear();
     copy(post_order(Start), std::back_inserter(FromIterator));
@@ -599,6 +618,14 @@ TEST(VPBasicBlockTest, TraversingIteratorTest) {
     EXPECT_EQ(R3BB1, FromIterator[5]);
     EXPECT_EQ(VPBB2, FromIterator[6]);
 
+    SmallVector<VPBlockBase *> FromIteratorVPBB;
+    copy(VPBlockUtils::blocksOnly<VPBasicBlock>(depth_first(Start)),
+         std::back_inserter(FromIteratorVPBB));
+    EXPECT_EQ(VPBB1, FromIteratorVPBB[0]);
+    EXPECT_EQ(R2BB1, FromIteratorVPBB[1]);
+    EXPECT_EQ(R3BB1, FromIteratorVPBB[2]);
+    EXPECT_EQ(VPBB2, FromIteratorVPBB[3]);
+
     // Post-order.
     FromIterator.clear();
     copy(post_order(Start), std::back_inserter(FromIterator));
@@ -610,6 +637,25 @@ TEST(VPBasicBlockTest, TraversingIteratorTest) {
     EXPECT_EQ(R2, FromIterator[4]);
     EXPECT_EQ(R1, FromIterator[5]);
     EXPECT_EQ(VPBB1, FromIterator[6]);
+
+    // Post-order, const VPRegionBlocks only.
+    VPBlockRecursiveTraversalWrapper<const VPBlockBase *> StartConst(VPBB1);
+    SmallVector<const VPRegionBlock *> FromIteratorVPRegion(
+        VPBlockUtils::blocksOnly<const VPRegionBlock>(post_order(StartConst)));
+    EXPECT_EQ(3u, FromIteratorVPRegion.size());
+    EXPECT_EQ(R3, FromIteratorVPRegion[0]);
+    EXPECT_EQ(R2, FromIteratorVPRegion[1]);
+    EXPECT_EQ(R1, FromIteratorVPRegion[2]);
+
+    // Post-order, VPBasicBlocks only.
+    FromIterator.clear();
+    copy(VPBlockUtils::blocksOnly<VPBasicBlock>(post_order(Start)),
+         std::back_inserter(FromIterator));
+    EXPECT_EQ(FromIterator.size(), 4u);
+    EXPECT_EQ(VPBB2, FromIterator[0]);
+    EXPECT_EQ(R3BB1, FromIterator[1]);
+    EXPECT_EQ(R2BB1, FromIterator[2]);
+    EXPECT_EQ(VPBB1, FromIterator[3]);
 
     // Use Plan to properly clean up created blocks.
     VPlan Plan;
@@ -890,20 +936,20 @@ TEST(VPRecipeTest, CastVPWidenMemoryInstructionRecipeToVPUserAndVPDef) {
       new LoadInst(Int32, UndefValue::get(Int32Ptr), "", false, Align(1));
   VPValue Addr;
   VPValue Mask;
-  VPWidenMemoryInstructionRecipe Recipe(*Load, &Addr, &Mask);
+  VPWidenMemoryInstructionRecipe Recipe(*Load, &Addr, &Mask, true, false);
   EXPECT_TRUE(isa<VPUser>(&Recipe));
   VPRecipeBase *BaseR = &Recipe;
   EXPECT_TRUE(isa<VPUser>(BaseR));
   EXPECT_EQ(&Recipe, BaseR);
 
-  VPValue *VPV = Recipe.getVPValue();
+  VPValue *VPV = Recipe.getVPSingleValue();
   EXPECT_TRUE(isa<VPRecipeBase>(VPV->getDef()));
   EXPECT_EQ(&Recipe, dyn_cast<VPRecipeBase>(VPV->getDef()));
 
   delete Load;
 }
 
-TEST(VPRecipeTest, MayHaveSideEffects) {
+TEST(VPRecipeTest, MayHaveSideEffectsAndMayReadWriteMemory) {
   LLVMContext C;
   IntegerType *Int1 = IntegerType::get(C, 1);
   IntegerType *Int32 = IntegerType::get(C, 32);
@@ -919,7 +965,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     Args.push_back(&Op1);
     VPWidenRecipe Recipe(*AI, make_range(Args.begin(), Args.end()));
     EXPECT_FALSE(Recipe.mayHaveSideEffects());
-
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_FALSE(Recipe.mayReadOrWriteMemory());
     delete AI;
   }
 
@@ -936,6 +984,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     VPWidenSelectRecipe Recipe(*SelectI, make_range(Args.begin(), Args.end()),
                                false);
     EXPECT_FALSE(Recipe.mayHaveSideEffects());
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_FALSE(Recipe.mayReadOrWriteMemory());
     delete SelectI;
   }
 
@@ -949,6 +1000,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     Args.push_back(&Op2);
     VPWidenGEPRecipe Recipe(GEP, make_range(Args.begin(), Args.end()));
     EXPECT_FALSE(Recipe.mayHaveSideEffects());
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_FALSE(Recipe.mayReadOrWriteMemory());
     delete GEP;
   }
 
@@ -956,6 +1010,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     VPValue Mask;
     VPBranchOnMaskRecipe Recipe(&Mask);
     EXPECT_FALSE(Recipe.mayHaveSideEffects());
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_FALSE(Recipe.mayReadOrWriteMemory());
   }
 
   {
@@ -965,6 +1022,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     VPReductionRecipe Recipe(nullptr, nullptr, &ChainOp, &CondOp, &VecOp,
                              nullptr);
     EXPECT_FALSE(Recipe.mayHaveSideEffects());
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_FALSE(Recipe.mayReadOrWriteMemory());
   }
 
   {
@@ -972,10 +1032,27 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
         new LoadInst(Int32, UndefValue::get(Int32Ptr), "", false, Align(1));
     VPValue Addr;
     VPValue Mask;
-    VPWidenMemoryInstructionRecipe Recipe(*Load, &Addr, &Mask);
+    VPWidenMemoryInstructionRecipe Recipe(*Load, &Addr, &Mask, true, false);
     EXPECT_TRUE(Recipe.mayHaveSideEffects());
-
+    EXPECT_TRUE(Recipe.mayReadFromMemory());
+    EXPECT_FALSE(Recipe.mayWriteToMemory());
+    EXPECT_TRUE(Recipe.mayReadOrWriteMemory());
     delete Load;
+  }
+
+  {
+    auto *Store = new StoreInst(UndefValue::get(Int32),
+                                UndefValue::get(Int32Ptr), false, Align(1));
+    VPValue Addr;
+    VPValue Mask;
+    VPValue StoredV;
+    VPWidenMemoryInstructionRecipe Recipe(*Store, &Addr, &StoredV, &Mask, false,
+                                          false);
+    EXPECT_TRUE(Recipe.mayHaveSideEffects());
+    EXPECT_FALSE(Recipe.mayReadFromMemory());
+    EXPECT_TRUE(Recipe.mayWriteToMemory());
+    EXPECT_TRUE(Recipe.mayReadOrWriteMemory());
+    delete Store;
   }
 
   {
@@ -988,6 +1065,9 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
     Args.push_back(&Op2);
     VPWidenCallRecipe Recipe(*Call, make_range(Args.begin(), Args.end()));
     EXPECT_TRUE(Recipe.mayHaveSideEffects());
+    EXPECT_TRUE(Recipe.mayReadFromMemory());
+    EXPECT_TRUE(Recipe.mayWriteToMemory());
+    EXPECT_TRUE(Recipe.mayReadOrWriteMemory());
     delete Call;
   }
 
@@ -995,8 +1075,12 @@ TEST(VPRecipeTest, MayHaveSideEffects) {
   {
     VPValue Op1;
     VPValue Op2;
-    VPInstruction Recipe(Instruction::Add, {&Op1, &Op2});
+    VPInstruction VPInst(Instruction::Add, {&Op1, &Op2});
+    VPRecipeBase &Recipe = VPInst;
     EXPECT_TRUE(Recipe.mayHaveSideEffects());
+    EXPECT_TRUE(Recipe.mayReadFromMemory());
+    EXPECT_TRUE(Recipe.mayWriteToMemory());
+    EXPECT_TRUE(Recipe.mayReadOrWriteMemory());
   }
 }
 

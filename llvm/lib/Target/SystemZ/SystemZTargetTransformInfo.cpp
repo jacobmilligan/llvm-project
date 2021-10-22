@@ -243,7 +243,8 @@ SystemZTTIImpl::getPopcntSupport(unsigned TyWidth) {
 }
 
 void SystemZTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
-                                             TTI::UnrollingPreferences &UP) {
+                                             TTI::UnrollingPreferences &UP,
+                                             OptimizationRemarkEmitter *ORE) {
   // Find out if L contains a call, what the machine instruction count
   // estimate is, and how many stores there are.
   bool HasCall = false;
@@ -423,8 +424,8 @@ InstructionCost SystemZTTIImpl::getArithmeticInstrCost(
           (C->getType()->isVectorTy()
                ? dyn_cast_or_null<const ConstantInt>(C->getSplatValue())
                : dyn_cast<const ConstantInt>(C));
-      if (CVal != nullptr &&
-          (CVal->getValue().isPowerOf2() || (-CVal->getValue()).isPowerOf2()))
+      if (CVal && (CVal->getValue().isPowerOf2() ||
+                   CVal->getValue().isNegatedPowerOf2()))
         DivRemConstPow2 = true;
       else
         DivRemConst = true;
@@ -541,7 +542,7 @@ InstructionCost SystemZTTIImpl::getArithmeticInstrCost(
     // There is no native support for FRem.
     if (Opcode == Instruction::FRem) {
       SmallVector<Type *> Tys(Args.size(), Ty);
-      unsigned Cost =
+      InstructionCost Cost =
           (VF * LIBCALL_COST) + getScalarizationOverhead(VTy, Args, Tys);
       // FIXME: VF 2 for float is currently just as expensive as for VF 4.
       if (VF == 2 && ScalarBits == 32)
@@ -559,6 +560,7 @@ InstructionCost SystemZTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
                                                VectorType *Tp,
                                                ArrayRef<int> Mask, int Index,
                                                VectorType *SubTp) {
+  Kind = improveShuffleKindFromMask(Kind, Mask);
   if (ST->hasVector()) {
     unsigned NumVectors = getNumVectorRegs(Tp);
 
@@ -1144,9 +1146,6 @@ InstructionCost SystemZTTIImpl::getInterleavedMemoryOpCost(
   assert(isa<VectorType>(VecTy) &&
          "Expect a vector type for interleaved memory op");
 
-  // Return the ceiling of dividing A by B.
-  auto ceil = [](unsigned A, unsigned B) { return (A + B - 1) / B; };
-
   unsigned NumElts = cast<FixedVectorType>(VecTy)->getNumElements();
   assert(Factor > 1 && NumElts % Factor == 0 && "Invalid interleave factor");
   unsigned VF = NumElts / Factor;
@@ -1173,7 +1172,7 @@ InstructionCost SystemZTTIImpl::getInterleavedMemoryOpCost(
       // requires one operation, except that vperm can handle two input
       // registers first time for each dst vector.
       unsigned NumSrcVecs = ValueVecs[Index].count();
-      unsigned NumDstVecs = ceil(VF * getScalarSizeInBits(VecTy), 128U);
+      unsigned NumDstVecs = divideCeil(VF * getScalarSizeInBits(VecTy), 128U);
       assert (NumSrcVecs >= NumDstVecs && "Expected at least as many sources");
       NumPermutes += std::max(1U, NumSrcVecs - NumDstVecs);
     }

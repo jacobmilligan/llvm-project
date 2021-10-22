@@ -17,6 +17,7 @@
 #include "AMDGPUMachineFunction.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "SIInstrInfo.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Support/raw_ostream.h"
@@ -25,9 +26,9 @@ namespace llvm {
 
 class MachineFrameInfo;
 class MachineFunction;
-class TargetRegisterClass;
 class SIMachineFunctionInfo;
 class SIRegisterInfo;
+class TargetRegisterClass;
 
 class AMDGPUPseudoSourceValue : public PseudoSourceValue {
 public:
@@ -288,10 +289,12 @@ struct SIMachineFunctionInfo final : public yaml::MachineFunctionInfo {
 
   Optional<SIArgumentInfo> ArgInfo;
   SIMode Mode;
+  Optional<FrameIndex> ScavengeFI;
 
   SIMachineFunctionInfo() = default;
   SIMachineFunctionInfo(const llvm::SIMachineFunctionInfo &,
-                        const TargetRegisterInfo &TRI);
+                        const TargetRegisterInfo &TRI,
+                        const llvm::MachineFunction &MF);
 
   void mappingImpl(yaml::IO &YamlIO) override;
   ~SIMachineFunctionInfo() = default;
@@ -321,6 +324,7 @@ template <> struct MappingTraits<SIMachineFunctionInfo> {
     YamlIO.mapOptional("highBitsOf32BitAddress",
                        MFI.HighBitsOf32BitAddress, 0u);
     YamlIO.mapOptional("occupancy", MFI.Occupancy, 0);
+    YamlIO.mapOptional("scavengeFI", MFI.ScavengeFI);
   }
 };
 
@@ -429,6 +433,8 @@ private:
   // Current recorded maximum possible occupancy.
   unsigned Occupancy;
 
+  mutable Optional<bool> UsesAGPRs;
+
   MCPhysReg getNextUserSGPR() const;
 
   MCPhysReg getNextSystemSGPR() const;
@@ -463,7 +469,7 @@ public:
 
   // Map WWM VGPR to a stack slot that is used to save/restore it in the
   // prolog/epilog.
-  SmallDenseMap<Register, Optional<int>> WWMReservedRegs;
+  MapVector<Register, Optional<int>> WWMReservedRegs;
 
 private:
   // Track VGPR + wave index for each subregister of the SGPR spilled to
@@ -501,7 +507,10 @@ public: // FIXME
 public:
   SIMachineFunctionInfo(const MachineFunction &MF);
 
-  bool initializeBaseYamlFields(const yaml::SIMachineFunctionInfo &YamlMFI);
+  bool initializeBaseYamlFields(const yaml::SIMachineFunctionInfo &YamlMFI,
+                                const MachineFunction &MF,
+                                PerFunctionMIParsingState &PFS,
+                                SMDiagnostic &Error, SMRange &SourceRange);
 
   void reserveWWMRegister(Register Reg, Optional<int> FI) {
     WWMReservedRegs.insert(std::make_pair(Reg, FI));
@@ -545,6 +554,7 @@ public:
   void removeDeadFrameIndices(MachineFrameInfo &MFI);
 
   int getScavengeFI(MachineFrameInfo &MFI, const SIRegisterInfo &TRI);
+  Optional<int> getOptionalScavengeFI() const { return ScavengeFI; }
 
   bool hasCalculatedTID() const { return TIDReg != 0; };
   Register getTIDReg() const { return TIDReg; };
@@ -938,6 +948,9 @@ public:
       Occupancy = Limit;
     limitOccupancy(MF);
   }
+
+  // \returns true if a function needs or may need AGPRs.
+  bool usesAGPRs(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm

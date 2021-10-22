@@ -10,14 +10,14 @@
 
 #include <string>
 
-#include <stdint.h>
+#include <cstdint>
 #include <tuple>
 
 using namespace lldb_private;
 
 // UriParser::Parse
 bool UriParser::Parse(llvm::StringRef uri, llvm::StringRef &scheme,
-                      llvm::StringRef &hostname, int &port,
+                      llvm::StringRef &hostname, llvm::Optional<uint16_t> &port,
                       llvm::StringRef &path) {
   llvm::StringRef tmp_scheme, tmp_hostname, tmp_path;
 
@@ -61,7 +61,7 @@ bool UriParser::Parse(llvm::StringRef uri, llvm::StringRef &scheme,
       return false;
     port = port_value;
   } else
-    port = -1;
+    port = llvm::None;
 
   scheme = tmp_scheme;
   hostname = tmp_hostname;

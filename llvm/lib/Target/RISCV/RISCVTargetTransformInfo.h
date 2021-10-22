@@ -18,6 +18,7 @@
 
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
+#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/IR/Function.h"
@@ -66,10 +67,14 @@ public:
           ST->hasStdExtV() ? ST->getMinRVVVectorSizeInBits() : 0);
     case TargetTransformInfo::RGK_ScalableVector:
       return TypeSize::getScalable(
-          ST->hasStdExtV() ? ST->getMinRVVVectorSizeInBits() : 0);
+          ST->hasStdExtV() ? RISCV::RVVBitsPerBlock : 0);
     }
 
     llvm_unreachable("Unsupported register kind");
+  }
+
+  unsigned getMinVectorRegisterBitWidth() const {
+    return ST->hasStdExtV() ? ST->getMinRVVVectorSizeInBits() : 0;
   }
 
   InstructionCost getGatherScatterOpCost(unsigned Opcode, Type *DataTy,
@@ -77,24 +82,6 @@ public:
                                          Align Alignment,
                                          TTI::TargetCostKind CostKind,
                                          const Instruction *I);
-
-  bool isLegalElementTypeForRVV(Type *ScalarTy) {
-    if (ScalarTy->isPointerTy())
-      return true;
-
-    if (ScalarTy->isIntegerTy(8) || ScalarTy->isIntegerTy(16) ||
-        ScalarTy->isIntegerTy(32) || ScalarTy->isIntegerTy(64))
-      return true;
-
-    if (ScalarTy->isHalfTy())
-      return ST->hasStdExtZfh();
-    if (ScalarTy->isFloatTy())
-      return ST->hasStdExtF();
-    if (ScalarTy->isDoubleTy())
-      return ST->hasStdExtD();
-
-    return false;
-  }
 
   bool isLegalMaskedLoadStore(Type *DataType, Align Alignment) {
     if (!ST->hasStdExtV())
@@ -104,7 +91,17 @@ public:
     if (isa<FixedVectorType>(DataType) && ST->getMinRVVVectorSizeInBits() == 0)
       return false;
 
-    return isLegalElementTypeForRVV(DataType->getScalarType());
+    // Don't allow elements larger than the ELEN.
+    // FIXME: How to limit for scalable vectors?
+    if (isa<FixedVectorType>(DataType) &&
+        DataType->getScalarSizeInBits() > ST->getMaxELENForFixedLengthVectors())
+      return false;
+
+    if (Alignment <
+        DL.getTypeStoreSize(DataType->getScalarType()).getFixedSize())
+      return false;
+
+    return TLI->isLegalElementTypeForRVV(DataType->getScalarType());
   }
 
   bool isLegalMaskedLoad(Type *DataType, Align Alignment) {
@@ -122,7 +119,17 @@ public:
     if (isa<FixedVectorType>(DataType) && ST->getMinRVVVectorSizeInBits() == 0)
       return false;
 
-    return isLegalElementTypeForRVV(DataType->getScalarType());
+    // Don't allow elements larger than the ELEN.
+    // FIXME: How to limit for scalable vectors?
+    if (isa<FixedVectorType>(DataType) &&
+        DataType->getScalarSizeInBits() > ST->getMaxELENForFixedLengthVectors())
+      return false;
+
+    if (Alignment <
+        DL.getTypeStoreSize(DataType->getScalarType()).getFixedSize())
+      return false;
+
+    return TLI->isLegalElementTypeForRVV(DataType->getScalarType());
   }
 
   bool isLegalMaskedGather(Type *DataType, Align Alignment) {
@@ -130,6 +137,48 @@ public:
   }
   bool isLegalMaskedScatter(Type *DataType, Align Alignment) {
     return isLegalMaskedGatherScatter(DataType, Alignment);
+  }
+
+  /// \returns How the target needs this vector-predicated operation to be
+  /// transformed.
+  TargetTransformInfo::VPLegalization
+  getVPLegalizationStrategy(const VPIntrinsic &PI) const {
+    using VPLegalization = TargetTransformInfo::VPLegalization;
+    return VPLegalization(VPLegalization::Legal, VPLegalization::Legal);
+  }
+
+  bool isLegalToVectorizeReduction(const RecurrenceDescriptor &RdxDesc,
+                                   ElementCount VF) const {
+    if (!ST->hasStdExtV())
+      return false;
+
+    if (!VF.isScalable())
+      return true;
+
+    Type *Ty = RdxDesc.getRecurrenceType();
+    if (!TLI->isLegalElementTypeForRVV(Ty))
+      return false;
+
+    switch (RdxDesc.getRecurrenceKind()) {
+    case RecurKind::Add:
+    case RecurKind::FAdd:
+    case RecurKind::And:
+    case RecurKind::Or:
+    case RecurKind::Xor:
+    case RecurKind::SMin:
+    case RecurKind::SMax:
+    case RecurKind::UMin:
+    case RecurKind::UMax:
+    case RecurKind::FMin:
+    case RecurKind::FMax:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  unsigned getMaxInterleaveFactor(unsigned VF) {
+    return ST->getMaxInterleaveFactor();
   }
 };
 

@@ -6,15 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ARMFeatures.h"
 #include "ARMBaseInstrInfo.h"
-#include "Utils/ARMBaseInfo.h"
+#include "ARMFeatures.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "MCTargetDesc/ARMBaseInfo.h"
 #include "MCTargetDesc/ARMInstPrinter.h"
 #include "MCTargetDesc/ARMMCExpr.h"
 #include "MCTargetDesc/ARMMCTargetDesc.h"
 #include "TargetInfo/ARMTargetInfo.h"
+#include "Utils/ARMBaseInfo.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/None.h"
@@ -22,8 +22,8 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
@@ -32,7 +32,6 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCAsmParserExtension.h"
@@ -45,6 +44,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/SubtargetFeature.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/ARMEHABI.h"
 #include "llvm/Support/Casting.h"
@@ -54,7 +54,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/TargetParser.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -500,6 +499,7 @@ class ARMAsmParser : public MCTargetAsmParser {
                              StringRef FullInst, bool &CanAcceptCarrySet,
                              bool &CanAcceptPredicationCode,
                              bool &CanAcceptVPTPredicationCode);
+  bool enableArchExtFeature(StringRef Name, SMLoc &ExtLoc);
 
   void tryConvertingToTwoOperandForm(StringRef Mnemonic, bool CarrySetting,
                                      OperandVector &Operands);
@@ -2478,14 +2478,15 @@ public:
   }
 
   void addVPTPredNOperands(MCInst &Inst, unsigned N) const {
-    assert(N == 2 && "Invalid number of operands!");
+    assert(N == 3 && "Invalid number of operands!");
     Inst.addOperand(MCOperand::createImm(unsigned(getVPTPred())));
     unsigned RegNum = getVPTPred() == ARMVCC::None ? 0: ARM::P0;
     Inst.addOperand(MCOperand::createReg(RegNum));
+    Inst.addOperand(MCOperand::createReg(0));
   }
 
   void addVPTPredROperands(MCInst &Inst, unsigned N) const {
-    assert(N == 3 && "Invalid number of operands!");
+    assert(N == 4 && "Invalid number of operands!");
     addVPTPredNOperands(Inst, N-1);
     unsigned RegNum;
     if (getVPTPred() == ARMVCC::None) {
@@ -3343,16 +3344,16 @@ public:
     // regs) or q0-q4 (for 4)
     //
     // The MVE instructions taking a register range of this kind will
-    // need an operand in the QQPR or QQQQPR class, representing the
+    // need an operand in the MQQPR or MQQQQPR class, representing the
     // entire range as a unit. So we must translate into that class,
     // by finding the index of the base register in the MQPR reg
     // class, and returning the super-register at the corresponding
     // index in the target class.
 
     const MCRegisterClass *RC_in = &ARMMCRegisterClasses[ARM::MQPRRegClassID];
-    const MCRegisterClass *RC_out = (VectorList.Count == 2) ?
-      &ARMMCRegisterClasses[ARM::QQPRRegClassID] :
-      &ARMMCRegisterClasses[ARM::QQQQPRRegClassID];
+    const MCRegisterClass *RC_out =
+        (VectorList.Count == 2) ? &ARMMCRegisterClasses[ARM::MQQPRRegClassID]
+                                : &ARMMCRegisterClasses[ARM::MQQQQPRRegClassID];
 
     unsigned I, E = RC_out->getNumRegs();
     for (I = 0; I < E; I++)
@@ -5012,7 +5013,7 @@ ARMAsmParser::parseTraceSyncBarrierOptOperand(OperandVector &Operands) {
   if (Tok.isNot(AsmToken::Identifier))
      return MatchOperand_NoMatch;
 
-  if (!Tok.getString().equals_lower("csync"))
+  if (!Tok.getString().equals_insensitive("csync"))
     return MatchOperand_NoMatch;
 
   Parser.Lex(); // Eat identifier token.
@@ -5032,7 +5033,7 @@ ARMAsmParser::parseInstSyncBarrierOptOperand(OperandVector &Operands) {
   if (Tok.is(AsmToken::Identifier)) {
     StringRef OptStr = Tok.getString();
 
-    if (OptStr.equals_lower("sy"))
+    if (OptStr.equals_insensitive("sy"))
       Opt = ARM_ISB::SY;
     else
       return MatchOperand_NoMatch;
@@ -6194,7 +6195,7 @@ bool ARMAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
         return true;
       // If this is VMRS, check for the apsr_nzcv operand.
       if (Mnemonic == "vmrs" &&
-          Parser.getTok().getString().equals_lower("apsr_nzcv")) {
+          Parser.getTok().getString().equals_insensitive("apsr_nzcv")) {
         S = Parser.getTok().getLoc();
         Parser.Lex();
         Operands.push_back(ARMOperand::CreateToken("APSR_nzcv", S));
@@ -6330,10 +6331,10 @@ bool ARMAsmParser::parsePrefix(ARMMCExpr::VariantKind &RefKind) {
   }
 
   enum {
-    COFF = (1 << MCObjectFileInfo::IsCOFF),
-    ELF = (1 << MCObjectFileInfo::IsELF),
-    MACHO = (1 << MCObjectFileInfo::IsMachO),
-    WASM = (1 << MCObjectFileInfo::IsWasm),
+    COFF = (1 << MCContext::IsCOFF),
+    ELF = (1 << MCContext::IsELF),
+    MACHO = (1 << MCContext::IsMachO),
+    WASM = (1 << MCContext::IsWasm),
   };
   static const struct PrefixEntry {
     const char *Spelling;
@@ -6356,20 +6357,21 @@ bool ARMAsmParser::parsePrefix(ARMMCExpr::VariantKind &RefKind) {
   }
 
   uint8_t CurrentFormat;
-  switch (getContext().getObjectFileInfo()->getObjectFileType()) {
-  case MCObjectFileInfo::IsMachO:
+  switch (getContext().getObjectFileType()) {
+  case MCContext::IsMachO:
     CurrentFormat = MACHO;
     break;
-  case MCObjectFileInfo::IsELF:
+  case MCContext::IsELF:
     CurrentFormat = ELF;
     break;
-  case MCObjectFileInfo::IsCOFF:
+  case MCContext::IsCOFF:
     CurrentFormat = COFF;
     break;
-  case MCObjectFileInfo::IsWasm:
+  case MCContext::IsWasm:
     CurrentFormat = WASM;
     break;
-  case MCObjectFileInfo::IsXCOFF:
+  case MCContext::IsGOFF:
+  case MCContext::IsXCOFF:
     llvm_unreachable("unexpected object format");
     break;
   }
@@ -11001,10 +11003,9 @@ bool ARMAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
 /// parseDirective parses the arm specific directives
 bool ARMAsmParser::ParseDirective(AsmToken DirectiveID) {
-  const MCObjectFileInfo::Environment Format =
-    getContext().getObjectFileInfo()->getObjectFileType();
-  bool IsMachO = Format == MCObjectFileInfo::IsMachO;
-  bool IsCOFF = Format == MCObjectFileInfo::IsCOFF;
+  const MCContext::Environment Format = getContext().getObjectFileType();
+  bool IsMachO = Format == MCContext::IsMachO;
+  bool IsCOFF = Format == MCContext::IsCOFF;
 
   std::string IDVal = DirectiveID.getIdentifier().lower();
   if (IDVal == ".word")
@@ -11142,8 +11143,8 @@ void ARMAsmParser::onLabelParsed(MCSymbol *Symbol) {
 ///  ::= .thumbfunc symbol_name
 bool ARMAsmParser::parseDirectiveThumbFunc(SMLoc L) {
   MCAsmParser &Parser = getParser();
-  const auto Format = getContext().getObjectFileInfo()->getObjectFileType();
-  bool IsMachO = Format == MCObjectFileInfo::IsMachO;
+  const auto Format = getContext().getObjectFileType();
+  bool IsMachO = Format == MCContext::IsMachO;
 
   // Darwin asm has (optionally) function name after .thumb_func direction
   // ELF doesn't
@@ -11165,6 +11166,12 @@ bool ARMAsmParser::parseDirectiveThumbFunc(SMLoc L) {
   if (parseToken(AsmToken::EndOfStatement,
                  "unexpected token in '.thumb_func' directive"))
     return true;
+
+  // .thumb_func implies .thumb
+  if (!isThumb())
+    SwitchMode();
+
+  getParser().getStreamer().emitAssemblerFlag(MCAF_Code16);
 
   NextSymbolIsThumb = true;
   return false;
@@ -11320,8 +11327,8 @@ bool ARMAsmParser::parseDirectiveEabiAttr(SMLoc L) {
   TagLoc = Parser.getTok().getLoc();
   if (Parser.getTok().is(AsmToken::Identifier)) {
     StringRef Name = Parser.getTok().getIdentifier();
-    Optional<unsigned> Ret =
-        ELFAttrs::attrTypeFromString(Name, ARMBuildAttrs::ARMAttributeTags);
+    Optional<unsigned> Ret = ELFAttrs::attrTypeFromString(
+        Name, ARMBuildAttrs::getARMAttributeTags());
     if (!Ret.hasValue()) {
       Error(TagLoc, "attribute name not recognised: " + Name);
       return false;
@@ -11771,13 +11778,13 @@ bool ARMAsmParser::parseDirectiveEven(SMLoc L) {
     return true;
 
   if (!Section) {
-    getStreamer().InitSections(false);
+    getStreamer().initSections(false, getSTI());
     Section = getStreamer().getCurrentSectionOnly();
   }
 
   assert(Section && "must have section to emit alignment");
   if (Section->UseCodeAlign())
-    getStreamer().emitCodeAlignment(2);
+    getStreamer().emitCodeAlignment(2, &getSTI());
   else
     getStreamer().emitValueToAlignment(2);
 
@@ -11979,7 +11986,7 @@ bool ARMAsmParser::parseDirectiveAlign(SMLoc L) {
     const MCSection *Section = getStreamer().getCurrentSectionOnly();
     assert(Section && "must have section to emit alignment");
     if (Section->UseCodeAlign())
-      getStreamer().emitCodeAlignment(4, 0);
+      getStreamer().emitCodeAlignment(4, &getSTI(), 0);
     else
       getStreamer().emitValueToAlignment(4, 0, 1, 0);
     return false;
@@ -12226,9 +12233,7 @@ void ARMAsmParser::ReportNearMisses(SmallVectorImpl<NearMissInfo> &NearMisses,
   }
 }
 
-/// parseDirectiveArchExtension
-///   ::= .arch_extension [no]feature
-bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
+bool ARMAsmParser::enableArchExtFeature(StringRef Name, SMLoc &ExtLoc) {
   // FIXME: This structure should be moved inside ARMTargetParser
   // when we start to table-generate them, and we can use the ARM
   // flags below, that were generated by table-gen.
@@ -12237,48 +12242,45 @@ bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
     const FeatureBitset ArchCheck;
     const FeatureBitset Features;
   } Extensions[] = {
-    { ARM::AEK_CRC, {Feature_HasV8Bit}, {ARM::FeatureCRC} },
-    { ARM::AEK_CRYPTO,  {Feature_HasV8Bit},
-      {ARM::FeatureCrypto, ARM::FeatureNEON, ARM::FeatureFPARMv8} },
-    { ARM::AEK_FP, {Feature_HasV8Bit},
-      {ARM::FeatureVFP2_SP, ARM::FeatureFPARMv8} },
-    { (ARM::AEK_HWDIVTHUMB | ARM::AEK_HWDIVARM),
-      {Feature_HasV7Bit, Feature_IsNotMClassBit},
-      {ARM::FeatureHWDivThumb, ARM::FeatureHWDivARM} },
-    { ARM::AEK_MP, {Feature_HasV7Bit, Feature_IsNotMClassBit},
-      {ARM::FeatureMP} },
-    { ARM::AEK_SIMD, {Feature_HasV8Bit},
-      {ARM::FeatureNEON, ARM::FeatureVFP2_SP, ARM::FeatureFPARMv8} },
-    { ARM::AEK_SEC, {Feature_HasV6KBit}, {ARM::FeatureTrustZone} },
-    // FIXME: Only available in A-class, isel not predicated
-    { ARM::AEK_VIRT, {Feature_HasV7Bit}, {ARM::FeatureVirtualization} },
-    { ARM::AEK_FP16, {Feature_HasV8_2aBit},
-      {ARM::FeatureFPARMv8, ARM::FeatureFullFP16} },
-    { ARM::AEK_RAS, {Feature_HasV8Bit}, {ARM::FeatureRAS} },
-    { ARM::AEK_LOB, {Feature_HasV8_1MMainlineBit}, {ARM::FeatureLOB} },
-    // FIXME: Unsupported extensions.
-    { ARM::AEK_OS, {}, {} },
-    { ARM::AEK_IWMMXT, {}, {} },
-    { ARM::AEK_IWMMXT2, {}, {} },
-    { ARM::AEK_MAVERICK, {}, {} },
-    { ARM::AEK_XSCALE, {}, {} },
+      {ARM::AEK_CRC, {Feature_HasV8Bit}, {ARM::FeatureCRC}},
+      {ARM::AEK_AES,
+       {Feature_HasV8Bit},
+       {ARM::FeatureAES, ARM::FeatureNEON, ARM::FeatureFPARMv8}},
+      {ARM::AEK_SHA2,
+       {Feature_HasV8Bit},
+       {ARM::FeatureSHA2, ARM::FeatureNEON, ARM::FeatureFPARMv8}},
+      {ARM::AEK_CRYPTO,
+       {Feature_HasV8Bit},
+       {ARM::FeatureCrypto, ARM::FeatureNEON, ARM::FeatureFPARMv8}},
+      {ARM::AEK_FP,
+       {Feature_HasV8Bit},
+       {ARM::FeatureVFP2_SP, ARM::FeatureFPARMv8}},
+      {(ARM::AEK_HWDIVTHUMB | ARM::AEK_HWDIVARM),
+       {Feature_HasV7Bit, Feature_IsNotMClassBit},
+       {ARM::FeatureHWDivThumb, ARM::FeatureHWDivARM}},
+      {ARM::AEK_MP,
+       {Feature_HasV7Bit, Feature_IsNotMClassBit},
+       {ARM::FeatureMP}},
+      {ARM::AEK_SIMD,
+       {Feature_HasV8Bit},
+       {ARM::FeatureNEON, ARM::FeatureVFP2_SP, ARM::FeatureFPARMv8}},
+      {ARM::AEK_SEC, {Feature_HasV6KBit}, {ARM::FeatureTrustZone}},
+      // FIXME: Only available in A-class, isel not predicated
+      {ARM::AEK_VIRT, {Feature_HasV7Bit}, {ARM::FeatureVirtualization}},
+      {ARM::AEK_FP16,
+       {Feature_HasV8_2aBit},
+       {ARM::FeatureFPARMv8, ARM::FeatureFullFP16}},
+      {ARM::AEK_RAS, {Feature_HasV8Bit}, {ARM::FeatureRAS}},
+      {ARM::AEK_LOB, {Feature_HasV8_1MMainlineBit}, {ARM::FeatureLOB}},
+      // FIXME: Unsupported extensions.
+      {ARM::AEK_OS, {}, {}},
+      {ARM::AEK_IWMMXT, {}, {}},
+      {ARM::AEK_IWMMXT2, {}, {}},
+      {ARM::AEK_MAVERICK, {}, {}},
+      {ARM::AEK_XSCALE, {}, {}},
   };
-
-  MCAsmParser &Parser = getParser();
-
-  if (getLexer().isNot(AsmToken::Identifier))
-    return Error(getLexer().getLoc(), "expected architecture extension name");
-
-  StringRef Name = Parser.getTok().getString();
-  SMLoc ExtLoc = Parser.getTok().getLoc();
-  Lex();
-
-  if (parseToken(AsmToken::EndOfStatement,
-                 "unexpected token in '.arch_extension' directive"))
-    return true;
-
   bool EnableFeature = true;
-  if (Name.startswith_lower("no")) {
+  if (Name.startswith_insensitive("no")) {
     EnableFeature = false;
     Name = Name.substr(2);
   }
@@ -12306,8 +12308,35 @@ bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
     }
     FeatureBitset Features = ComputeAvailableFeatures(STI.getFeatureBits());
     setAvailableFeatures(Features);
-    return false;
+    return true;
   }
+  return false;
+}
+
+/// parseDirectiveArchExtension
+///   ::= .arch_extension [no]feature
+bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
+
+  MCAsmParser &Parser = getParser();
+
+  if (getLexer().isNot(AsmToken::Identifier))
+    return Error(getLexer().getLoc(), "expected architecture extension name");
+
+  StringRef Name = Parser.getTok().getString();
+  SMLoc ExtLoc = Parser.getTok().getLoc();
+  Lex();
+
+  if (parseToken(AsmToken::EndOfStatement,
+                 "unexpected token in '.arch_extension' directive"))
+    return true;
+
+  if (Name == "nocrypto") {
+    enableArchExtFeature("nosha2", ExtLoc);
+    enableArchExtFeature("noaes", ExtLoc);
+  }
+
+  if (enableArchExtFeature(Name, ExtLoc))
+    return false;
 
   return Error(ExtLoc, "unknown architectural extension: " + Name);
 }

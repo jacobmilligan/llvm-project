@@ -117,6 +117,11 @@ static cl::opt<std::string> ClWriteSummary(
     cl::desc("Write summary to given YAML file after running pass"),
     cl::Hidden);
 
+static cl::opt<bool>
+    ClDropTypeTests("lowertypetests-drop-type-tests",
+                    cl::desc("Simply drop type test assume sequences"),
+                    cl::Hidden, cl::init(false));
+
 bool BitSetInfo::containsGlobalOffset(uint64_t Offset) const {
   if (Offset < ByteOffset)
     return false;
@@ -337,7 +342,8 @@ private:
 struct ScopedSaveAliaseesAndUsed {
   Module &M;
   SmallVector<GlobalValue *, 4> Used, CompilerUsed;
-  std::vector<std::pair<GlobalIndirectSymbol *, Function *>> FunctionAliases;
+  std::vector<std::pair<GlobalAlias *, Function *>> FunctionAliases;
+  std::vector<std::pair<GlobalIFunc *, Function *>> ResolverIFuncs;
 
   ScopedSaveAliaseesAndUsed(Module &M) : M(M) {
     // The users of this class want to replace all function references except
@@ -357,13 +363,16 @@ struct ScopedSaveAliaseesAndUsed {
     if (GlobalVariable *GV = collectUsedGlobalVariables(M, CompilerUsed, true))
       GV->eraseFromParent();
 
-    for (auto &GIS : concat<GlobalIndirectSymbol>(M.aliases(), M.ifuncs())) {
+    for (auto &GA : M.aliases()) {
       // FIXME: This should look past all aliases not just interposable ones,
       // see discussion on D65118.
-      if (auto *F =
-              dyn_cast<Function>(GIS.getIndirectSymbol()->stripPointerCasts()))
-        FunctionAliases.push_back({&GIS, F});
+      if (auto *F = dyn_cast<Function>(GA.getAliasee()->stripPointerCasts()))
+        FunctionAliases.push_back({&GA, F});
     }
+
+    for (auto &GI : M.ifuncs())
+      if (auto *F = dyn_cast<Function>(GI.getResolver()->stripPointerCasts()))
+        ResolverIFuncs.push_back({&GI, F});
   }
 
   ~ScopedSaveAliaseesAndUsed() {
@@ -371,8 +380,15 @@ struct ScopedSaveAliaseesAndUsed {
     appendToCompilerUsed(M, CompilerUsed);
 
     for (auto P : FunctionAliases)
-      P.first->setIndirectSymbol(
+      P.first->setAliasee(
           ConstantExpr::getBitCast(P.second, P.first->getType()));
+
+    for (auto P : ResolverIFuncs) {
+      // This does not preserve pointer casts that may have been stripped by the
+      // constructor, but the resolver's type is different from that of the
+      // ifunc anyway.
+      P.first->setResolver(P.second);
+    }
   }
 };
 
@@ -528,7 +544,8 @@ struct LowerTypeTests : public ModulePass {
   LowerTypeTests(ModuleSummaryIndex *ExportSummary,
                  const ModuleSummaryIndex *ImportSummary, bool DropTypeTests)
       : ModulePass(ID), ExportSummary(ExportSummary),
-        ImportSummary(ImportSummary), DropTypeTests(DropTypeTests) {
+        ImportSummary(ImportSummary),
+        DropTypeTests(DropTypeTests || ClDropTypeTests) {
     initializeLowerTypeTestsPass(*PassRegistry::getPassRegistry());
   }
 
@@ -1687,7 +1704,7 @@ LowerTypeTestsModule::LowerTypeTestsModule(
     Module &M, ModuleSummaryIndex *ExportSummary,
     const ModuleSummaryIndex *ImportSummary, bool DropTypeTests)
     : M(M), ExportSummary(ExportSummary), ImportSummary(ImportSummary),
-      DropTypeTests(DropTypeTests) {
+      DropTypeTests(DropTypeTests || ClDropTypeTests) {
   assert(!(ExportSummary && ImportSummary));
   Triple TargetTriple(M.getTargetTriple());
   Arch = TargetTriple.getArch();
@@ -1793,6 +1810,14 @@ bool LowerTypeTestsModule::lower() {
       for (auto CIU = CI->use_begin(), CIUE = CI->use_end(); CIU != CIUE;)
         if (auto *Assume = dyn_cast<AssumeInst>((*CIU++).getUser()))
           Assume->eraseFromParent();
+      // If the assume was merged with another assume, we might have a use on a
+      // phi (which will feed the assume). Simply replace the use on the phi
+      // with "true" and leave the merged assume.
+      if (!CI->use_empty()) {
+        assert(all_of(CI->users(),
+                      [](User *U) -> bool { return isa<PHINode>(U); }));
+        CI->replaceAllUsesWith(ConstantInt::getTrue(M.getContext()));
+      }
       CI->eraseFromParent();
     }
 
@@ -2086,11 +2111,11 @@ bool LowerTypeTestsModule::lower() {
       auto CI = cast<CallInst>(U.getUser());
 
       std::vector<GlobalTypeMember *> Targets;
-      if (CI->getNumArgOperands() % 2 != 1)
+      if (CI->arg_size() % 2 != 1)
         report_fatal_error("number of arguments should be odd");
 
       GlobalClassesTy::member_iterator CurSet;
-      for (unsigned I = 1; I != CI->getNumArgOperands(); I += 2) {
+      for (unsigned I = 1; I != CI->arg_size(); I += 2) {
         int64_t Offset;
         auto *Base = dyn_cast<GlobalObject>(GetPointerBaseWithConstantOffset(
             CI->getOperand(I), Offset, M.getDataLayout()));

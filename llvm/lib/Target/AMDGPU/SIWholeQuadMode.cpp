@@ -923,7 +923,7 @@ MachineInstr *SIWholeQuadMode::lowerKillI1(MachineBasicBlock &MBB,
     } else {
       // Static: kill does nothing
       MachineInstr *NewTerm = nullptr;
-      if (IsDemote) {
+      if (MI.getOpcode() == AMDGPU::SI_DEMOTE_I1) {
         LIS->RemoveMachineInstrFromMaps(MI);
       } else {
         assert(MBB.succ_size() == 1);
@@ -1498,6 +1498,11 @@ void SIWholeQuadMode::lowerKillInstrs(bool IsWQM) {
 }
 
 bool SIWholeQuadMode::runOnMachineFunction(MachineFunction &MF) {
+  // This pass is a convenient place to re-enable machine verification after the
+  // problems caused by SILowerControlFlow have been fixed.
+  MF.getProperties().reset(
+      MachineFunctionProperties::Property::FailsVerification);
+
   LLVM_DEBUG(dbgs() << "SI Whole Quad Mode on " << MF.getName()
                     << " ------------- \n");
   LLVM_DEBUG(MF.dump(););

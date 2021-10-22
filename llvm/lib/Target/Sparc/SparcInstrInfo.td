@@ -1056,6 +1056,14 @@ let Predicates = [HasNoV9] in {
 		     "rd %tbr, $rd", []>;
 }
 
+// PC don't exist on the SparcV8, only the V9.
+let Predicates = [HasV9] in {
+  let rs2 = 0, rs1 = 5 in
+    def RDPC : F3_1<2, 0b101000,
+		     (outs IntRegs:$rd), (ins),
+		     "rd %pc, $rd", []>;
+}
+
 // Section B.29 - Write State Register Instructions
 def WRASRrr : F3_1<2, 0b110000,
                  (outs ASRRegs:$rd), (ins IntRegs:$rs1, IntRegs:$rs2),
@@ -1614,6 +1622,17 @@ let hasSideEffects = 1 in {
   defm TSUBCCTV : F3_12np<"tsubcctv", 0b100011>;
 }
 }
+
+// Section A.42 - Prefetch Data
+let Predicates = [HasV9] in {
+  def PREFETCHr : F3_1<3, 0b101101,
+                   (outs), (ins MEMrr:$addr, shift_imm5:$rd),
+                   "prefetch [$addr], $rd", []>;
+  def PREFETCHi : F3_2<3, 0b101101,
+                   (outs), (ins MEMri:$addr, shift_imm5:$rd),
+                   "prefetch [$addr], $rd", []>;
+}
+
 
 
 // Section A.43 - Read Privileged Register Instructions

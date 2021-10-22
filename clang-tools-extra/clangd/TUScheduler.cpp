@@ -286,8 +286,12 @@ public:
   void remove(PathRef MainFile) {
     std::lock_guard<std::mutex> Lock(Mu);
     Association *&First = MainToFirst[MainFile];
-    if (First)
+    if (First) {
       invalidate(First);
+      First = nullptr;
+    }
+    // MainToFirst entry should stay alive, as Associations might be pointing at
+    // its key.
   }
 
   /// Get the mainfile associated with Header, or the empty string if none.
@@ -901,14 +905,17 @@ void ASTWorker::runWithAST(
 void PreambleThread::build(Request Req) {
   assert(Req.CI && "Got preamble request with null compiler invocation");
   const ParseInputs &Inputs = Req.Inputs;
+  bool ReusedPreamble = false;
 
   Status.update([&](TUStatus &Status) {
     Status.PreambleActivity = PreambleAction::Building;
   });
-  auto _ = llvm::make_scope_exit([this, &Req] {
+  auto _ = llvm::make_scope_exit([this, &Req, &ReusedPreamble] {
     ASTPeer.updatePreamble(std::move(Req.CI), std::move(Req.Inputs),
                            LatestBuild, std::move(Req.CIDiags),
                            std::move(Req.WantDiags));
+    if (!ReusedPreamble)
+      Callbacks.onPreamblePublished(FileName);
   });
 
   if (!LatestBuild || Inputs.ForceRebuild) {
@@ -917,6 +924,7 @@ void PreambleThread::build(Request Req) {
   } else if (isPreambleCompatible(*LatestBuild, Inputs, FileName, *Req.CI)) {
     vlog("Reusing preamble version {0} for version {1} of {2}",
          LatestBuild->Version, Inputs.Version, FileName);
+    ReusedPreamble = true;
     return;
   } else {
     vlog("Rebuilding invalidated preamble for {0} version {1} (previous was "
@@ -1379,11 +1387,13 @@ bool ASTWorker::blockUntilIdle(Deadline Timeout) const {
   };
   // Make sure ASTWorker has processed all requests, which might issue new
   // updates to PreamblePeer.
-  WaitUntilASTWorkerIsIdle();
+  if (!WaitUntilASTWorkerIsIdle())
+    return false;
   // Now that ASTWorker processed all requests, ensure PreamblePeer has served
   // all update requests. This might create new PreambleRequests for the
   // ASTWorker.
-  PreamblePeer.blockUntilIdle(Timeout);
+  if (!PreamblePeer.blockUntilIdle(Timeout))
+    return false;
   assert(Requests.empty() &&
          "No new normal tasks can be scheduled concurrently with "
          "blockUntilIdle(): ASTWorker isn't threadsafe");
@@ -1505,6 +1515,10 @@ bool TUScheduler::update(PathRef File, ParseInputs Inputs,
     FD->Contents = Inputs.Contents;
   }
   FD->Worker->update(std::move(Inputs), WantDiags, ContentChanged);
+  // There might be synthetic update requests, don't change the LastActiveFile
+  // in such cases.
+  if (ContentChanged)
+    LastActiveFile = File.str();
   return NewFile;
 }
 
@@ -1534,6 +1548,10 @@ void TUScheduler::runQuick(llvm::StringRef Name, llvm::StringRef Path,
 void TUScheduler::runWithSemaphore(llvm::StringRef Name, llvm::StringRef Path,
                                    llvm::unique_function<void()> Action,
                                    Semaphore &Sem) {
+  if (Path.empty())
+    Path = LastActiveFile;
+  else
+    LastActiveFile = Path.str();
   if (!PreambleTasks) {
     WithContext WithProvidedContext(Opts.ContextProvider(Path));
     return Action();
@@ -1558,6 +1576,7 @@ void TUScheduler::runWithAST(
         "trying to get AST for non-added document", ErrorCode::InvalidParams));
     return;
   }
+  LastActiveFile = File.str();
 
   It->second->Worker->runWithAST(Name, std::move(Action), Invalidation);
 }
@@ -1572,6 +1591,7 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
         ErrorCode::InvalidParams));
     return;
   }
+  LastActiveFile = File.str();
 
   if (!PreambleTasks) {
     trace::Span Tracer(Name);
