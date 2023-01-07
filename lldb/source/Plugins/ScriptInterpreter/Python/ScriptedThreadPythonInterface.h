@@ -24,7 +24,8 @@ public:
 
   StructuredData::GenericSP
   CreatePluginObject(llvm::StringRef class_name, ExecutionContext &exe_ctx,
-                     StructuredData::DictionarySP args_sp) override;
+                     StructuredData::DictionarySP args_sp,
+                     StructuredData::Generic *script_obj = nullptr) override;
 
   lldb::tid_t GetThreadID() override;
 
@@ -41,8 +42,10 @@ public:
   StructuredData::DictionarySP GetRegisterInfo() override;
 
   llvm::Optional<std::string> GetRegisterContext() override;
+
+  StructuredData::ArraySP GetExtendedInfo() override;
 };
 } // namespace lldb_private
 
 #endif // LLDB_ENABLE_PYTHON
-#endif // LLDB_PLUGINS_SCRIPTINTERPRETER_PYTHON_SCRIPTEDPROCESSTHREADINTERFACE_H
+#endif // LLDB_PLUGINS_SCRIPTINTERPRETER_PYTHON_SCRIPTEDTHREADPYTHONINTERFACE_H

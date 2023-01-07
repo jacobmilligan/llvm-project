@@ -1,4 +1,4 @@
-// RUN: mlir-opt -allow-unregistered-dialect -test-gpu-memory-promotion -pass-pipeline='gpu.module(gpu.func(test-gpu-memory-promotion))' -split-input-file %s | FileCheck %s
+// RUN: mlir-opt -allow-unregistered-dialect -pass-pipeline='builtin.module(gpu.module(gpu.func(test-gpu-memory-promotion)))' -split-input-file %s | FileCheck %s
 
 gpu.module @foo {
 
@@ -11,12 +11,12 @@ gpu.module @foo {
     // CHECK-DAG: %[[c1:.*]] = arith.constant 1
     // CHECK-DAG: %[[c4:.*]] = arith.constant 4
     // CHECK-DAG: %[[c5:.*]] = arith.constant 5
-    // CHECK-DAG: %[[tx:.*]] = "gpu.thread_id"() {dimension = "x"}
-    // CHECK-DAG: %[[ty:.*]] = "gpu.thread_id"() {dimension = "y"}
-    // CHECK-DAG: %[[tz:.*]] = "gpu.thread_id"() {dimension = "z"}
-    // CHECK-DAG: %[[bdx:.*]] = "gpu.block_dim"() {dimension = "x"}
-    // CHECK-DAG: %[[bdy:.*]] = "gpu.block_dim"() {dimension = "y"}
-    // CHECK-DAG: %[[bdz:.*]] = "gpu.block_dim"() {dimension = "z"}
+    // CHECK-DAG: %[[tx:.*]] = gpu.thread_id x
+    // CHECK-DAG: %[[ty:.*]] = gpu.thread_id y
+    // CHECK-DAG: %[[tz:.*]] = gpu.thread_id z
+    // CHECK-DAG: %[[bdx:.*]] = gpu.block_dim x
+    // CHECK-DAG: %[[bdy:.*]] = gpu.block_dim y
+    // CHECK-DAG: %[[bdz:.*]] = gpu.block_dim z
 
     // Verify that loops for the copy are emitted. We only check the number of
     // loops here since their bounds are produced by mapLoopToProcessorIds,
@@ -65,12 +65,12 @@ gpu.module @foo {
     // CHECK-DAG: %[[c6:.*]] = arith.constant 6
     // CHECK-DAG: %[[c7:.*]] = arith.constant 7
     // CHECK-DAG: %[[c8:.*]] = arith.constant 8
-    // CHECK-DAG: %[[tx:.*]] = "gpu.thread_id"() {dimension = "x"}
-    // CHECK-DAG: %[[ty:.*]] = "gpu.thread_id"() {dimension = "y"}
-    // CHECK-DAG: %[[tz:.*]] = "gpu.thread_id"() {dimension = "z"}
-    // CHECK-DAG: %[[bdx:.*]] = "gpu.block_dim"() {dimension = "x"}
-    // CHECK-DAG: %[[bdy:.*]] = "gpu.block_dim"() {dimension = "y"}
-    // CHECK-DAG: %[[bdz:.*]] = "gpu.block_dim"() {dimension = "z"}
+    // CHECK-DAG: %[[tx:.*]] = gpu.thread_id x
+    // CHECK-DAG: %[[ty:.*]] = gpu.thread_id y
+    // CHECK-DAG: %[[tz:.*]] = gpu.thread_id z
+    // CHECK-DAG: %[[bdx:.*]] = gpu.block_dim x
+    // CHECK-DAG: %[[bdy:.*]] = gpu.block_dim y
+    // CHECK-DAG: %[[bdz:.*]] = gpu.block_dim z
 
     // Verify that loops for the copy are emitted.
     // CHECK: scf.for %[[i0:.*]] =

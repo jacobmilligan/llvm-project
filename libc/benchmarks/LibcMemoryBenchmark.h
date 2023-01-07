@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Alignment.h"
 #include <cstdint>
+#include <optional>
 #include <random>
 
 namespace llvm {
@@ -58,7 +59,7 @@ struct StudyConfiguration {
   // None : Use a fixed address that is at least cache line aligned,
   //    1 : Use random address,
   //   >1 : Use random address aligned to value.
-  MaybeAlign AccessAlignment = None;
+  MaybeAlign AccessAlignment = std::nullopt;
 
   // When Function == 'memcmp', this is the buffers mismatch position.
   //  0 : Buffers always compare equal,
@@ -204,6 +205,24 @@ struct CopySetup : public ParameterBatch {
 private:
   AlignedBuffer SrcBuffer;
   AlignedBuffer DstBuffer;
+};
+
+/// Provides source and destination buffers for the Move operation as well as
+/// the associated size distributions.
+struct MoveSetup : public ParameterBatch {
+  MoveSetup();
+
+  inline static const ArrayRef<MemorySizeDistribution> getDistributions() {
+    return getMemmoveSizeDistributions();
+  }
+
+  inline void *Call(ParameterType Parameter, MemmoveFunction Memmove) {
+    return Memmove(Buffer + ParameterBatch::BufferSize / 3,
+                   Buffer + Parameter.OffsetBytes, Parameter.SizeBytes);
+  }
+
+private:
+  AlignedBuffer Buffer;
 };
 
 /// Provides destination buffer for the Set operation as well as the associated

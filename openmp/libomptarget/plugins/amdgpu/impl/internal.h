@@ -33,19 +33,6 @@
 
 #define MAX_NUM_KERNELS (1024 * 16)
 
-typedef struct impl_implicit_args_s {
-  unsigned long offset_x;
-  unsigned long offset_y;
-  unsigned long offset_z;
-  unsigned long hostcall_ptr;
-  char num_gpu_queues;
-  unsigned long gpu_queue_ptr;
-  char num_cpu_queues;
-  unsigned long cpu_worker_signals;
-  unsigned long cpu_queue_ptr;
-  unsigned long kernarg_template_ptr;
-} impl_implicit_args_t;
-
 // ---------------------- Kernel Start -------------
 typedef struct atl_kernel_info_s {
   uint64_t kernel_object;
@@ -56,10 +43,8 @@ typedef struct atl_kernel_info_s {
   uint32_t sgpr_spill_count;
   uint32_t vgpr_spill_count;
   uint32_t kernel_segment_size;
-  uint32_t num_args;
-  std::vector<uint64_t> arg_alignments;
-  std::vector<uint64_t> arg_offsets;
-  std::vector<uint64_t> arg_sizes;
+  uint32_t explicit_argument_count;
+  uint32_t implicit_argument_count;
 } atl_kernel_info_t;
 
 typedef struct atl_symbol_info_s {

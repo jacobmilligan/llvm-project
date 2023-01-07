@@ -24,7 +24,6 @@ namespace llvm {
 class ARCSubtarget;
 
 class ARCInstrInfo : public ARCGenInstrInfo {
-  const ARCSubtarget &ST;
   const ARCRegisterInfo RI;
   virtual void anchor();
 
@@ -72,12 +71,14 @@ public:
                            MachineBasicBlock::iterator MI, Register SrcReg,
                            bool IsKill, int FrameIndex,
                            const TargetRegisterClass *RC,
-                           const TargetRegisterInfo *TRI) const override;
+                           const TargetRegisterInfo *TRI,
+                           Register VReg) const override;
 
   void loadRegFromStackSlot(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MI, Register DestReg,
                             int FrameIndex, const TargetRegisterClass *RC,
-                            const TargetRegisterInfo *TRI) const override;
+                            const TargetRegisterInfo *TRI,
+                            Register VReg) const override;
 
   bool
   reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;

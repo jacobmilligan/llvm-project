@@ -16,17 +16,18 @@
 #include "Protocol.h"
 #include "support/Context.h"
 #include "support/ThreadsafeFS.h"
+#include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Format/Format.h"
+#include "clang/Lex/HeaderSearch.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Syntax/Tokens.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/SHA1.h"
 #include <string>
 
 namespace clang {
@@ -319,10 +320,17 @@ llvm::Optional<DefinedMacro> locateMacroAt(const syntax::Token &SpelledTok,
 /// Infers whether this is a header from the FileName and LangOpts (if
 /// presents).
 bool isHeaderFile(llvm::StringRef FileName,
-                  llvm::Optional<LangOptions> LangOpts = llvm::None);
+                  llvm::Optional<LangOptions> LangOpts = std::nullopt);
 
 /// Returns true if the given location is in a generated protobuf file.
 bool isProtoFile(SourceLocation Loc, const SourceManager &SourceMgr);
+
+/// Returns true if Name is reserved, like _Foo or __Vector_base.
+inline bool isReservedName(llvm::StringRef Name) {
+  // This doesn't catch all cases, but the most common.
+  return Name.size() >= 2 && Name[0] == '_' &&
+         (isUppercase(Name[1]) || Name[1] == '_');
+}
 
 } // namespace clangd
 } // namespace clang

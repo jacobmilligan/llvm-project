@@ -28,7 +28,6 @@
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PackedVector.h"
 #include "llvm/ADT/SmallBitVector.h"
@@ -46,7 +45,8 @@ static bool isTrackedVar(const VarDecl *vd, const DeclContext *dc) {
       !vd->isExceptionVariable() && !vd->isInitCapture() &&
       !vd->isImplicit() && vd->getDeclContext() == dc) {
     QualType ty = vd->getType();
-    return ty->isScalarType() || ty->isVectorType() || ty->isRecordType();
+    return ty->isScalarType() || ty->isVectorType() || ty->isRecordType() ||
+           ty->isRVVType();
   }
   return false;
 }
@@ -89,7 +89,7 @@ void DeclToIndex::computeMap(const DeclContext &dc) {
 Optional<unsigned> DeclToIndex::getValueIndex(const VarDecl *d) const {
   llvm::DenseMap<const VarDecl *, unsigned>::const_iterator I = map.find(d);
   if (I == map.end())
-    return None;
+    return std::nullopt;
   return I->second;
 }
 
@@ -147,9 +147,8 @@ public:
 
   Value getValue(const CFGBlock *block, const CFGBlock *dstBlock,
                  const VarDecl *vd) {
-    const Optional<unsigned> &idx = declToIndex.getValueIndex(vd);
-    assert(idx.hasValue());
-    return getValueVector(block)[idx.getValue()];
+    Optional<unsigned> idx = declToIndex.getValueIndex(vd);
+    return getValueVector(block)[*idx];
   }
 };
 
@@ -208,9 +207,7 @@ void CFGBlockValues::resetScratch() {
 }
 
 ValueVector::reference CFGBlockValues::operator[](const VarDecl *vd) {
-  const Optional<unsigned> &idx = declToIndex.getValueIndex(vd);
-  assert(idx.hasValue());
-  return scratch[idx.getValue()];
+  return scratch[*declToIndex.getValueIndex(vd)];
 }
 
 //------------------------------------------------------------------------====//
@@ -591,8 +588,8 @@ public:
 
         if (AtPredExit == MayUninitialized) {
           // If the predecessor's terminator is an "asm goto" that initializes
-          // the variable, then it won't be counted as "initialized" on the
-          // non-fallthrough paths.
+          // the variable, then don't count it as "initialized" on the indirect
+          // paths.
           CFGTerminator term = Pred->getTerminator();
           if (const auto *as = dyn_cast_or_null<GCCAsmStmt>(term.getStmt())) {
             const CFGBlock *fallthrough = *Pred->succ_begin();
@@ -810,13 +807,21 @@ void TransferFunctions::VisitGCCAsmStmt(GCCAsmStmt *as) {
   if (!as->isAsmGoto())
     return;
 
-  for (const Expr *o : as->outputs())
-    if (const VarDecl *VD = findVar(o).getDecl())
-      if (vals[VD] != Initialized)
-        // If the variable isn't initialized by the time we get here, then we
-        // mark it as potentially uninitialized for those cases where it's used
-        // on an indirect path, where it's not guaranteed to be defined.
-        vals[VD] = MayUninitialized;
+  ASTContext &C = ac.getASTContext();
+  for (const Expr *O : as->outputs()) {
+    const Expr *Ex = stripCasts(C, O);
+
+    // Strip away any unary operators. Invalid l-values are reported by other
+    // semantic analysis passes.
+    while (const auto *UO = dyn_cast<UnaryOperator>(Ex))
+      Ex = stripCasts(C, UO->getSubExpr());
+
+    // Mark the variable as potentially uninitialized for those cases where
+    // it's used on an indirect path, where it's not guaranteed to be
+    // defined.
+    if (const VarDecl *VD = findVar(Ex).getDecl())
+      vals[VD] = MayUninitialized;
+  }
 }
 
 void TransferFunctions::VisitObjCMessageExpr(ObjCMessageExpr *ME) {

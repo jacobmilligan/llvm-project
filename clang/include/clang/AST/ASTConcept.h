@@ -22,7 +22,6 @@
 
 namespace clang {
 class ConceptDecl;
-class ConceptSpecializationExpr;
 
 /// The result of a constraint satisfaction check, containing the necessary
 /// information to diagnose an unsatisfied constraint.
@@ -45,6 +44,7 @@ public:
   using Detail = llvm::PointerUnion<Expr *, SubstitutionDiagnostic *>;
 
   bool IsSatisfied = false;
+  bool ContainsErrors = false;
 
   /// \brief Pairs of unsatisfied atomic constraint expressions along with the
   /// substituted constraint expr, if the template arguments could be
@@ -59,6 +59,13 @@ public:
   static void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &C,
                       const NamedDecl *ConstraintOwner,
                       ArrayRef<TemplateArgument> TemplateArgs);
+
+  bool HasSubstitutionFailure() {
+    for (const auto &Detail : Details)
+      if (Detail.second.dyn_cast<SubstitutionDiagnostic *>())
+        return true;
+    return false;
+  }
 };
 
 /// Pairs of unsatisfied atomic constraint expressions along with the
@@ -79,6 +86,7 @@ struct ASTConstraintSatisfaction final :
                           UnsatisfiedConstraintRecord> {
   std::size_t NumRecords;
   bool IsSatisfied : 1;
+  bool ContainsErrors : 1;
 
   const UnsatisfiedConstraintRecord *begin() const {
     return getTrailingObjects<UnsatisfiedConstraintRecord>();
@@ -90,9 +98,13 @@ struct ASTConstraintSatisfaction final :
 
   ASTConstraintSatisfaction(const ASTContext &C,
                             const ConstraintSatisfaction &Satisfaction);
+  ASTConstraintSatisfaction(const ASTContext &C,
+                            const ASTConstraintSatisfaction &Satisfaction);
 
   static ASTConstraintSatisfaction *
   Create(const ASTContext &C, const ConstraintSatisfaction &Satisfaction);
+  static ASTConstraintSatisfaction *
+  Rebuild(const ASTContext &C, const ASTConstraintSatisfaction &Satisfaction);
 };
 
 /// \brief Common data class for constructs that reference concepts with
@@ -123,17 +135,16 @@ protected:
   const ASTTemplateArgumentListInfo *ArgsAsWritten;
 
 public:
-
   ConceptReference(NestedNameSpecifierLoc NNS, SourceLocation TemplateKWLoc,
                    DeclarationNameInfo ConceptNameInfo, NamedDecl *FoundDecl,
                    ConceptDecl *NamedConcept,
-                   const ASTTemplateArgumentListInfo *ArgsAsWritten) :
-      NestedNameSpec(NNS), TemplateKWLoc(TemplateKWLoc),
-      ConceptName(ConceptNameInfo), FoundDecl(FoundDecl),
-      NamedConcept(NamedConcept), ArgsAsWritten(ArgsAsWritten) {}
+                   const ASTTemplateArgumentListInfo *ArgsAsWritten)
+      : NestedNameSpec(NNS), TemplateKWLoc(TemplateKWLoc),
+        ConceptName(ConceptNameInfo), FoundDecl(FoundDecl),
+        NamedConcept(NamedConcept), ArgsAsWritten(ArgsAsWritten) {}
 
-  ConceptReference() : NestedNameSpec(), TemplateKWLoc(), ConceptName(),
-      FoundDecl(nullptr), NamedConcept(nullptr), ArgsAsWritten(nullptr) {}
+  ConceptReference()
+      : FoundDecl(nullptr), NamedConcept(nullptr), ArgsAsWritten(nullptr) {}
 
   const NestedNameSpecifierLoc &getNestedNameSpecifierLoc() const {
     return NestedNameSpec;

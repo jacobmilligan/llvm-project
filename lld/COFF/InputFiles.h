@@ -95,13 +95,17 @@ public:
   COFFLinkerContext &ctx;
 
 protected:
-  InputFile(COFFLinkerContext &c, Kind k, MemoryBufferRef m)
-      : mb(m), ctx(c), fileKind(k) {}
+  InputFile(COFFLinkerContext &c, Kind k, MemoryBufferRef m, bool lazy = false)
+      : mb(m), ctx(c), fileKind(k), lazy(lazy) {}
 
   StringRef directives;
 
 private:
   const Kind fileKind;
+
+public:
+  // True if this is a lazy ObjFile or BitcodeFile.
+  bool lazy = false;
 };
 
 // .lib or .a file.
@@ -121,33 +125,14 @@ private:
   llvm::DenseSet<uint64_t> seen;
 };
 
-// .obj or .o file between -start-lib and -end-lib.
-class LazyObjFile : public InputFile {
-public:
-  explicit LazyObjFile(COFFLinkerContext &ctx, MemoryBufferRef m)
-      : InputFile(ctx, LazyObjectKind, m) {}
-  static bool classof(const InputFile *f) {
-    return f->kind() == LazyObjectKind;
-  }
-  // Makes this object file part of the link.
-  void fetch();
-  // Adds the symbols in this file to the symbol table as LazyObject symbols.
-  void parse() override;
-
-private:
-  std::vector<Symbol *> symbols;
-};
-
 // .obj or .o file. This may be a member of an archive file.
 class ObjFile : public InputFile {
 public:
-  explicit ObjFile(COFFLinkerContext &ctx, MemoryBufferRef m)
-      : InputFile(ctx, ObjectKind, m) {}
-  explicit ObjFile(COFFLinkerContext &ctx, MemoryBufferRef m,
-                   std::vector<Symbol *> &&symbols)
-      : InputFile(ctx, ObjectKind, m), symbols(std::move(symbols)) {}
+  explicit ObjFile(COFFLinkerContext &ctx, MemoryBufferRef m, bool lazy = false)
+      : InputFile(ctx, ObjectKind, m, lazy) {}
   static bool classof(const InputFile *f) { return f->kind() == ObjectKind; }
   void parse() override;
+  void parseLazy();
   MachineTypes getMachineType() override;
   ArrayRef<Chunk *> getChunks() { return chunks; }
   ArrayRef<SectionChunk *> getDebugChunks() { return debugChunks; }
@@ -207,7 +192,7 @@ public:
   // When using Microsoft precompiled headers, this is the PCH's key.
   // The same key is used by both the precompiled object, and objects using the
   // precompiled object. Any difference indicates out-of-date objects.
-  llvm::Optional<uint32_t> pchSignature;
+  std::optional<uint32_t> pchSignature;
 
   // Whether this file was compiled with /hotpatch.
   bool hotPatchable = false;
@@ -221,11 +206,11 @@ public:
   // The .debug$P or .debug$T section data if present. Empty otherwise.
   ArrayRef<uint8_t> debugTypes;
 
-  llvm::Optional<std::pair<StringRef, uint32_t>>
+  std::optional<std::pair<StringRef, uint32_t>>
   getVariableLocation(StringRef var);
 
-  llvm::Optional<llvm::DILineInfo> getDILineInfo(uint32_t offset,
-                                                 uint32_t sectionIndex);
+  std::optional<llvm::DILineInfo> getDILineInfo(uint32_t offset,
+                                                uint32_t sectionIndex);
 
 private:
   const coff_section* getSection(uint32_t i);
@@ -273,7 +258,7 @@ private:
                         bool &prevailing, DefinedRegular *leader,
                         const llvm::object::coff_aux_section_definition *def);
 
-  llvm::Optional<Symbol *>
+  std::optional<Symbol *>
   createDefined(COFFSymbolRef sym,
                 std::vector<const llvm::object::coff_aux_section_definition *>
                     &comdatDefs,
@@ -334,7 +319,7 @@ public:
                                           StringRef path, ObjFile *fromFile);
 
   // Record possible errors while opening the PDB file
-  llvm::Optional<Error> loadErr;
+  std::optional<std::string> loadErrorStr;
 
   // This is the actual interface to the PDB (if it was opened successfully)
   std::unique_ptr<llvm::pdb::NativeSession> session;
@@ -380,15 +365,14 @@ public:
 // Used for LTO.
 class BitcodeFile : public InputFile {
 public:
-  BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb, StringRef archiveName,
-              uint64_t offsetInArchive);
-  explicit BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef m,
+  explicit BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
                        StringRef archiveName, uint64_t offsetInArchive,
-                       std::vector<Symbol *> &&symbols);
+                       bool lazy);
   ~BitcodeFile();
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   ArrayRef<Symbol *> getSymbols() { return symbols; }
   MachineTypes getMachineType() override;
+  void parseLazy();
   std::unique_ptr<llvm::lto::InputFile> obj;
 
 private:

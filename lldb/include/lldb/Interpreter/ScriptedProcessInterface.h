@@ -10,7 +10,6 @@
 #define LLDB_INTERPRETER_SCRIPTEDPROCESSINTERFACE_H
 
 #include "lldb/Core/StructuredDataImpl.h"
-#include "lldb/Interpreter/ScriptInterpreter.h"
 #include "lldb/Interpreter/ScriptedInterface.h"
 #include "lldb/Target/MemoryRegionInfo.h"
 
@@ -23,8 +22,9 @@ class ScriptedProcessInterface : virtual public ScriptedInterface {
 public:
   StructuredData::GenericSP
   CreatePluginObject(llvm::StringRef class_name, ExecutionContext &exe_ctx,
-                     StructuredData::DictionarySP args_sp) override {
-    return nullptr;
+                     StructuredData::DictionarySP args_sp,
+                     StructuredData::Generic *script_obj = nullptr) override {
+    return {};
   }
 
   virtual Status Launch() { return Status("ScriptedProcess did not launch"); }
@@ -41,63 +41,68 @@ public:
     return {};
   }
 
+  virtual StructuredData::DictionarySP GetThreadsInfo() { return {}; }
+
   virtual StructuredData::DictionarySP GetThreadWithID(lldb::tid_t tid) {
-    return nullptr;
+    return {};
   }
 
   virtual StructuredData::DictionarySP GetRegistersForThread(lldb::tid_t tid) {
-    return nullptr;
+    return {};
   }
 
   virtual lldb::DataExtractorSP
   ReadMemoryAtAddress(lldb::addr_t address, size_t size, Status &error) {
-    return nullptr;
+    return {};
   }
 
-  virtual StructuredData::DictionarySP GetLoadedImages() { return nullptr; }
+  virtual StructuredData::ArraySP GetLoadedImages() { return {}; }
 
   virtual lldb::pid_t GetProcessID() { return LLDB_INVALID_PROCESS_ID; }
 
   virtual bool IsAlive() { return true; }
 
   virtual llvm::Optional<std::string> GetScriptedThreadPluginName() {
-    return llvm::None;
+    return std::nullopt;
   }
+
+  virtual StructuredData::DictionarySP GetMetadata() { return {}; }
 
 protected:
   friend class ScriptedThread;
-  virtual lldb::ScriptedThreadInterfaceSP GetScriptedThreadInterface() {
-    return nullptr;
+  virtual lldb::ScriptedThreadInterfaceSP CreateScriptedThreadInterface() {
+    return {};
   }
-
-  lldb::ScriptedThreadInterfaceSP m_scripted_thread_interface_sp = nullptr;
 };
 
 class ScriptedThreadInterface : virtual public ScriptedInterface {
 public:
   StructuredData::GenericSP
   CreatePluginObject(llvm::StringRef class_name, ExecutionContext &exe_ctx,
-                     StructuredData::DictionarySP args_sp) override {
-    return nullptr;
+                     StructuredData::DictionarySP args_sp,
+                     StructuredData::Generic *script_obj = nullptr) override {
+    return {};
   }
 
   virtual lldb::tid_t GetThreadID() { return LLDB_INVALID_THREAD_ID; }
 
-  virtual llvm::Optional<std::string> GetName() { return llvm::None; }
+  virtual llvm::Optional<std::string> GetName() { return std::nullopt; }
 
   virtual lldb::StateType GetState() { return lldb::eStateInvalid; }
 
-  virtual llvm::Optional<std::string> GetQueue() { return llvm::None; }
+  virtual llvm::Optional<std::string> GetQueue() { return std::nullopt; }
 
-  virtual StructuredData::DictionarySP GetStopReason() { return nullptr; }
+  virtual StructuredData::DictionarySP GetStopReason() { return {}; }
 
-  virtual StructuredData::ArraySP GetStackFrames() { return nullptr; }
+  virtual StructuredData::ArraySP GetStackFrames() { return {}; }
 
-  virtual StructuredData::DictionarySP GetRegisterInfo() { return nullptr; }
+  virtual StructuredData::DictionarySP GetRegisterInfo() { return {}; }
 
   virtual llvm::Optional<std::string> GetRegisterContext() {
-    return llvm::None;
+    return std::nullopt;
   }
+
+  virtual StructuredData::ArraySP GetExtendedInfo() { return {}; }
 };
 } // namespace lldb_private
 

@@ -8,7 +8,6 @@
 
 #include "lldb/Host/Config.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"
 #include "lldb/lldb-enumerations.h"
 
 #if LLDB_ENABLE_PYTHON
@@ -36,6 +35,14 @@ ScriptedPythonInterface::GetStatusFromMethod(llvm::StringRef method_name) {
 }
 
 template <>
+StructuredData::ArraySP
+ScriptedPythonInterface::ExtractValueFromPythonObject<StructuredData::ArraySP>(
+    python::PythonObject &p, Status &error) {
+  python::PythonList result_list(python::PyRefType::Borrowed, p.get());
+  return result_list.CreateStructuredArray();
+}
+
+template <>
 StructuredData::DictionarySP
 ScriptedPythonInterface::ExtractValueFromPythonObject<
     StructuredData::DictionarySP>(python::PythonObject &p, Status &error) {
@@ -48,11 +55,11 @@ Status ScriptedPythonInterface::ExtractValueFromPythonObject<Status>(
     python::PythonObject &p, Status &error) {
   if (lldb::SBError *sb_error = reinterpret_cast<lldb::SBError *>(
           LLDBSWIGPython_CastPyObjectToSBError(p.get())))
-    error = m_interpreter.GetStatusFromSBError(*sb_error);
+    return m_interpreter.GetStatusFromSBError(*sb_error);
   else
     error.SetErrorString("Couldn't cast lldb::SBError to lldb::Status.");
 
-  return error;
+  return {};
 }
 
 template <>

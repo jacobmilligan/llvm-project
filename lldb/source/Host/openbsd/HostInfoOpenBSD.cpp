@@ -38,21 +38,7 @@ llvm::Optional<std::string> HostInfoOpenBSD::GetOSBuildString() {
   if (::sysctl(mib, 2, &osrev, &osrev_len, NULL, 0) == 0)
     return llvm::formatv("{0,8:8}", osrev).str();
 
-  return llvm::None;
-}
-
-bool HostInfoOpenBSD::GetOSKernelDescription(std::string &s) {
-  struct utsname un;
-
-  ::memset(&un, 0, sizeof(utsname));
-  s.clear();
-
-  if (uname(&un) < 0)
-    return false;
-
-  s.assign(un.version);
-
-  return true;
+  return std::nullopt;
 }
 
 FileSpec HostInfoOpenBSD::GetProgramFileSpec() {

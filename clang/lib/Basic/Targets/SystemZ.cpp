@@ -20,7 +20,7 @@
 using namespace clang;
 using namespace clang::targets;
 
-const Builtin::Info SystemZTargetInfo::BuiltinInfo[] = {
+static constexpr Builtin::Info BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
   {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
@@ -59,6 +59,17 @@ bool SystemZTargetInfo::validateAsmConstraint(
   default:
     return false;
 
+  case 'Z':
+    switch (Name[1]) {
+    default:
+      return false;
+    case 'Q': // Address with base and unsigned 12-bit displacement
+    case 'R': // Likewise, plus an index
+    case 'S': // Address with base and signed 20-bit displacement
+    case 'T': // Likewise, plus an index
+      break;
+    }
+    [[fallthrough]];
   case 'a': // Address register
   case 'd': // Data register (equivalent to 'r')
   case 'f': // Floating-point register
@@ -93,7 +104,7 @@ static constexpr ISANameRevision ISARevisions[] = {
   {{"arch11"}, 11}, {{"z13"}, 11},
   {{"arch12"}, 12}, {{"z14"}, 12},
   {{"arch13"}, 13}, {{"z15"}, 13},
-  {{"arch14"}, 14}
+  {{"arch14"}, 14}, {{"z16"}, 14},
 };
 
 int SystemZTargetInfo::getISARevision(StringRef Name) const {

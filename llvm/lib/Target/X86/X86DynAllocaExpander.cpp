@@ -212,6 +212,12 @@ void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
   bool Is64BitAlloca = MI->getOpcode() == X86::DYN_ALLOCA_64;
   assert(SlotSize == 4 || SlotSize == 8);
 
+  std::optional<MachineFunction::DebugInstrOperandPair> InstrNum;
+  if (unsigned Num = MI->peekDebugInstrNum()) {
+    // Operand 2 of DYN_ALLOCAs contains the stack def.
+    InstrNum = {Num, 2};
+  }
+
   switch (L) {
   case TouchAndSub: {
     assert(Amount >= SlotSize);
@@ -225,7 +231,7 @@ void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
       break;
 
     // Fall through to make any remaining adjustment.
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   }
   case Sub:
     assert(Amount > 0);
@@ -251,7 +257,7 @@ void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
 
       // Do the probe.
       STI->getFrameLowering()->emitStackProbe(*MBB->getParent(), *MBB, MI, DL,
-                                              /*InProlog=*/false);
+                                              /*InProlog=*/false, InstrNum);
     } else {
       // Sub
       BuildMI(*MBB, I, DL,
@@ -281,14 +287,7 @@ bool X86DynAllocaExpander::runOnMachineFunction(MachineFunction &MF) {
   TRI = STI->getRegisterInfo();
   StackPtr = TRI->getStackRegister();
   SlotSize = TRI->getSlotSize();
-
-  StackProbeSize = 4096;
-  if (MF.getFunction().hasFnAttribute("stack-probe-size")) {
-    MF.getFunction()
-        .getFnAttribute("stack-probe-size")
-        .getValueAsString()
-        .getAsInteger(0, StackProbeSize);
-  }
+  StackProbeSize = STI->getTargetLowering()->getStackProbeSize(MF);
   NoStackArgProbe = MF.getFunction().hasFnAttribute("no-stack-arg-probe");
   if (NoStackArgProbe)
     StackProbeSize = INT64_MAX;

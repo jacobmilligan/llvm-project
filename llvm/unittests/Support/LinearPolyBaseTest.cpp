@@ -94,7 +94,7 @@ using Univariate3DBase = UnivariateLinearPolyBase<Univariate3D>;
 class Univariate3D : public Univariate3DBase {
 public:
   using ScalarTy = Univariate3DBase::ScalarTy;
-  Univariate3D(ScalarTy x, unsigned Dim) : Univariate3DBase(x, Dim) {}
+  constexpr Univariate3D(ScalarTy x, unsigned Dim) : Univariate3DBase(x, Dim) {}
   Univariate3D(const Univariate3DBase &Convert) : Univariate3DBase(Convert) {}
 };
 
@@ -124,9 +124,6 @@ TEST(UnivariateLinearPolyBase, Univariate3D_GetValue) {
   EXPECT_EQ(Univariate3D(42, 1).getValue(0), 0);
   EXPECT_EQ(Univariate3D(42, 1).getValue(1), 42);
   EXPECT_EQ(Univariate3D(42, 1).getValue(2), 0);
-
-  EXPECT_EQ(Univariate3D(42, 0).getValue(), 42);
-  EXPECT_EQ(Univariate3D(42, 1).getValue(), 42);
 }
 
 TEST(UnivariateLinearPolyBase, Univariate3D_Add) {

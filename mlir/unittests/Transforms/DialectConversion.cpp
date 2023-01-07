@@ -14,12 +14,14 @@ using namespace mlir;
 static Operation *createOp(MLIRContext *context) {
   context->allowUnregisteredDialects();
   return Operation::create(UnknownLoc::get(context),
-                           OperationName("foo.bar", context), llvm::None,
-                           llvm::None, llvm::None, llvm::None, 0);
+                           OperationName("foo.bar", context), std::nullopt,
+                           std::nullopt, std::nullopt, std::nullopt, 0);
 }
 
 namespace {
 struct DummyOp {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DummyOp)
+
   static StringRef getOperationName() { return "foo.bar"; }
 };
 
@@ -35,15 +37,19 @@ TEST(DialectConversionTest, DynamicallyLegalOpCallbackOrder) {
   });
 
   int callbackCalled2 = 0;
-  target.addDynamicallyLegalOp<DummyOp>([&](Operation *) -> Optional<bool> {
-    callbackCalled2 = ++index;
-    return llvm::None;
-  });
+  target.addDynamicallyLegalOp<DummyOp>(
+      [&](Operation *) -> std::optional<bool> {
+        callbackCalled2 = ++index;
+        return std::nullopt;
+      });
 
   auto *op = createOp(&context);
   EXPECT_TRUE(target.isLegal(op));
   EXPECT_EQ(2, callbackCalled1);
   EXPECT_EQ(1, callbackCalled2);
+  EXPECT_FALSE(target.isIllegal(op));
+  EXPECT_EQ(4, callbackCalled1);
+  EXPECT_EQ(3, callbackCalled2);
   op->destroy();
 }
 
@@ -53,14 +59,17 @@ TEST(DialectConversionTest, DynamicallyLegalOpCallbackSkip) {
 
   int index = 0;
   int callbackCalled = 0;
-  target.addDynamicallyLegalOp<DummyOp>([&](Operation *) -> Optional<bool> {
-    callbackCalled = ++index;
-    return llvm::None;
-  });
+  target.addDynamicallyLegalOp<DummyOp>(
+      [&](Operation *) -> std::optional<bool> {
+        callbackCalled = ++index;
+        return std::nullopt;
+      });
 
   auto *op = createOp(&context);
   EXPECT_FALSE(target.isLegal(op));
   EXPECT_EQ(1, callbackCalled);
+  EXPECT_FALSE(target.isIllegal(op));
+  EXPECT_EQ(2, callbackCalled);
   op->destroy();
 }
 
@@ -76,15 +85,52 @@ TEST(DialectConversionTest, DynamicallyLegalUnknownOpCallbackOrder) {
   });
 
   int callbackCalled2 = 0;
-  target.markUnknownOpDynamicallyLegal([&](Operation *) -> Optional<bool> {
+  target.markUnknownOpDynamicallyLegal([&](Operation *) -> std::optional<bool> {
     callbackCalled2 = ++index;
-    return llvm::None;
+    return std::nullopt;
   });
 
   auto *op = createOp(&context);
   EXPECT_TRUE(target.isLegal(op));
   EXPECT_EQ(2, callbackCalled1);
   EXPECT_EQ(1, callbackCalled2);
+  EXPECT_FALSE(target.isIllegal(op));
+  EXPECT_EQ(4, callbackCalled1);
+  EXPECT_EQ(3, callbackCalled2);
+  op->destroy();
+}
+
+TEST(DialectConversionTest, DynamicallyLegalReturnNone) {
+  MLIRContext context;
+  ConversionTarget target(context);
+
+  target.addDynamicallyLegalOp<DummyOp>(
+      [&](Operation *) -> std::optional<bool> { return std::nullopt; });
+
+  auto *op = createOp(&context);
+  EXPECT_FALSE(target.isLegal(op));
+  EXPECT_FALSE(target.isIllegal(op));
+
+  EXPECT_TRUE(succeeded(applyPartialConversion(op, target, {})));
+  EXPECT_TRUE(failed(applyFullConversion(op, target, {})));
+
+  op->destroy();
+}
+
+TEST(DialectConversionTest, DynamicallyLegalUnknownReturnNone) {
+  MLIRContext context;
+  ConversionTarget target(context);
+
+  target.markUnknownOpDynamicallyLegal(
+      [&](Operation *) -> std::optional<bool> { return std::nullopt; });
+
+  auto *op = createOp(&context);
+  EXPECT_FALSE(target.isLegal(op));
+  EXPECT_FALSE(target.isIllegal(op));
+
+  EXPECT_TRUE(succeeded(applyPartialConversion(op, target, {})));
+  EXPECT_TRUE(failed(applyFullConversion(op, target, {})));
+
   op->destroy();
 }
 } // namespace

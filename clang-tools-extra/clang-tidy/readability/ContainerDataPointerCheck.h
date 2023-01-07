@@ -20,8 +20,8 @@ namespace readability {
 /// This only replaces the case where the offset being accessed through the
 /// subscript operation is a known constant 0.  This avoids a potential invalid
 /// memory access when the container is empty.  Cases where the constant is not
-/// explictly zero can be addressed through the clang static analyzer, and those
-/// which cannot be statically identified can be caught using UBSan.
+/// explicitly zero can be addressed through the clang static analyzer, and
+/// those which cannot be statically identified can be caught using UBSan.
 class ContainerDataPointerCheck : public ClangTidyCheck {
 public:
   ContainerDataPointerCheck(StringRef Name, ClangTidyContext *Context);
@@ -34,7 +34,7 @@ public:
 
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 
-  llvm::Optional<TraversalKind> getCheckTraversalKind() const override {
+  std::optional<TraversalKind> getCheckTraversalKind() const override {
     return TK_IgnoreUnlessSpelledInSource;
   }
 };

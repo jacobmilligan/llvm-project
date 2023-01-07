@@ -93,7 +93,8 @@ std::string getNVPTXRegClassStr(TargetRegisterClass const *RC) {
 }
 }
 
-NVPTXRegisterInfo::NVPTXRegisterInfo() : NVPTXGenRegisterInfo(0) {}
+NVPTXRegisterInfo::NVPTXRegisterInfo()
+    : NVPTXGenRegisterInfo(0), StrPool(StrAlloc) {}
 
 #define GET_REGINFO_TARGET_DESC
 #include "NVPTXGenRegisterInfo.inc"
@@ -107,10 +108,18 @@ NVPTXRegisterInfo::getCalleeSavedRegs(const MachineFunction *) const {
 
 BitVector NVPTXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
+  for (unsigned Reg = NVPTX::ENVREG0; Reg <= NVPTX::ENVREG31; ++Reg) {
+    markSuperRegs(Reserved, Reg);
+  }
+  markSuperRegs(Reserved, NVPTX::VRFrame32);
+  markSuperRegs(Reserved, NVPTX::VRFrameLocal32);
+  markSuperRegs(Reserved, NVPTX::VRFrame64);
+  markSuperRegs(Reserved, NVPTX::VRFrameLocal64);
+  markSuperRegs(Reserved, NVPTX::VRDepot);
   return Reserved;
 }
 
-void NVPTXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+bool NVPTXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                             int SPAdj, unsigned FIOperandNum,
                                             RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected");
@@ -125,6 +134,7 @@ void NVPTXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // Using I0 as the frame pointer
   MI.getOperand(FIOperandNum).ChangeToRegister(getFrameRegister(MF), false);
   MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
+  return false;
 }
 
 Register NVPTXRegisterInfo::getFrameRegister(const MachineFunction &MF) const {

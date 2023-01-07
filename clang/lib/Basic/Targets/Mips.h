@@ -40,7 +40,6 @@ class LLVM_LIBRARY_VISIBILITY MipsTargetInfo : public TargetInfo {
       resetDataLayout(("e-" + Layout).str());
   }
 
-  static const Builtin::Info BuiltinInfo[];
   std::string CPU;
   bool IsMips16;
   bool IsMicromips;
@@ -406,7 +405,7 @@ public:
   unsigned getUnwindWordWidth() const override;
 
   bool validateTarget(DiagnosticsEngine &Diags) const override;
-  bool hasExtIntType() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 } // namespace targets
 } // namespace clang

@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Frontend/AnalysisConsumer.h"
@@ -29,9 +30,9 @@ class FalsePositiveGenerator : public Checker<eval::Call> {
   using HandlerFn = bool (Self::*)(const CallEvent &Call,
                                    CheckerContext &) const;
   CallDescriptionMap<HandlerFn> Callbacks = {
-      {{"reachedWithContradiction", 0}, &Self::reachedWithContradiction},
-      {{"reachedWithNoContradiction", 0}, &Self::reachedWithNoContradiction},
-      {{"reportIfCanBeTrue", 1}, &Self::reportIfCanBeTrue},
+      {{{"reachedWithContradiction"}, 0}, &Self::reachedWithContradiction},
+      {{{"reachedWithNoContradiction"}, 0}, &Self::reachedWithNoContradiction},
+      {{{"reportIfCanBeTrue"}, 1}, &Self::reportIfCanBeTrue},
   };
 
   bool report(CheckerContext &C, ProgramStateRef State,

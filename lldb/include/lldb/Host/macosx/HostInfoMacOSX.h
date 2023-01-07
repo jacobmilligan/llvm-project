@@ -25,13 +25,12 @@ public:
   static llvm::VersionTuple GetOSVersion();
   static llvm::VersionTuple GetMacCatalystVersion();
   static llvm::Optional<std::string> GetOSBuildString();
-  static bool GetOSKernelDescription(std::string &s);
   static FileSpec GetProgramFileSpec();
   static FileSpec GetXcodeContentsDirectory();
   static FileSpec GetXcodeDeveloperDirectory();
 
   /// Query xcrun to find an Xcode SDK directory.
-  static llvm::StringRef GetXcodeSDKPath(XcodeSDK sdk);
+  static llvm::Expected<llvm::StringRef> GetXcodeSDKPath(XcodeSDK sdk);
 
   /// Shared cache utilities
   static SharedCacheImageInfo

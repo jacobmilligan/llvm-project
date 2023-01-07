@@ -24,6 +24,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCSectionWasm.h"
@@ -272,11 +273,11 @@ public:
 #include "WebAssemblyGenAsmMatcher.inc"
 
   // TODO: This is required to be implemented, but appears unused.
-  bool ParseRegister(unsigned & /*RegNo*/, SMLoc & /*StartLoc*/,
+  bool parseRegister(MCRegister & /*RegNo*/, SMLoc & /*StartLoc*/,
                      SMLoc & /*EndLoc*/) override {
-    llvm_unreachable("ParseRegister is not implemented.");
+    llvm_unreachable("parseRegister is not implemented.");
   }
-  OperandMatchResultTy tryParseRegister(unsigned & /*RegNo*/,
+  OperandMatchResultTy tryParseRegister(MCRegister & /*RegNo*/,
                                         SMLoc & /*StartLoc*/,
                                         SMLoc & /*EndLoc*/) override {
     llvm_unreachable("tryParseRegister is not implemented.");
@@ -374,7 +375,7 @@ public:
       auto Type = WebAssembly::parseType(Lexer.getTok().getString());
       if (!Type)
         return error("unknown type: ", Lexer.getTok());
-      Types.push_back(Type.getValue());
+      Types.push_back(*Type);
       Parser.Lex();
       if (!isNext(AsmToken::Comma))
         break;
@@ -571,7 +572,6 @@ public:
     // proper nesting.
     bool ExpectBlockType = false;
     bool ExpectFuncType = false;
-    bool ExpectHeapType = false;
     std::unique_ptr<WebAssemblyOperand> FunctionTable;
     if (Name == "block") {
       push(Block);
@@ -624,8 +624,6 @@ public:
       if (parseFunctionTableOperand(&FunctionTable))
         return true;
       ExpectFuncType = true;
-    } else if (Name == "ref.null") {
-      ExpectHeapType = true;
     }
 
     if (ExpectFuncType || (ExpectBlockType && Lexer.is(AsmToken::LParen))) {
@@ -670,23 +668,15 @@ public:
             return error("Unknown block type: ", Id);
           addBlockTypeOperand(Operands, NameLoc, BT);
           Parser.Lex();
-        } else if (ExpectHeapType) {
-          auto HeapType = WebAssembly::parseHeapType(Id.getString());
-          if (HeapType == WebAssembly::HeapType::Invalid) {
-            return error("Expected a heap type: ", Id);
-          }
-          Operands.push_back(std::make_unique<WebAssemblyOperand>(
-              WebAssemblyOperand::Integer, Id.getLoc(), Id.getEndLoc(),
-              WebAssemblyOperand::IntOp{static_cast<int64_t>(HeapType)}));
-          Parser.Lex();
         } else {
           // Assume this identifier is a label.
           const MCExpr *Val;
+          SMLoc Start = Id.getLoc();
           SMLoc End;
           if (Parser.parseExpression(Val, End))
             return error("Cannot parse symbol: ", Lexer.getTok());
           Operands.push_back(std::make_unique<WebAssemblyOperand>(
-              WebAssemblyOperand::Symbol, Id.getLoc(), Id.getEndLoc(),
+              WebAssemblyOperand::Symbol, Start, End,
               WebAssemblyOperand::SymOp{Val}));
           if (checkForP2AlignIfLoadStore(Operands, Name))
             return true;
@@ -827,8 +817,7 @@ public:
       // Now set this symbol with the correct type.
       auto WasmSym = cast<MCSymbolWasm>(Ctx.getOrCreateSymbol(SymName));
       WasmSym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
-      WasmSym->setGlobalType(
-          wasm::WasmGlobalType{uint8_t(Type.getValue()), Mutable});
+      WasmSym->setGlobalType(wasm::WasmGlobalType{uint8_t(*Type), Mutable});
       // And emit the directive again.
       TOut.emitGlobalType(WasmSym);
       return expect(AsmToken::EndOfStatement, "EOL");
@@ -846,7 +835,8 @@ public:
       auto ElemTypeName = expectIdent();
       if (ElemTypeName.empty())
         return true;
-      Optional<wasm::ValType> ElemType = WebAssembly::parseType(ElemTypeName);
+      std::optional<wasm::ValType> ElemType =
+          WebAssembly::parseType(ElemTypeName);
       if (!ElemType)
         return error("Unknown type in .tabletype directive: ", ElemTypeTok);
 
@@ -858,7 +848,7 @@ public:
       // symbol
       auto WasmSym = cast<MCSymbolWasm>(Ctx.getOrCreateSymbol(SymName));
       WasmSym->setType(wasm::WASM_SYMBOL_TYPE_TABLE);
-      wasm::WasmTableType Type = {uint8_t(ElemType.getValue()), Limits};
+      wasm::WasmTableType Type = {uint8_t(*ElemType), Limits};
       WasmSym->setTableType(Type);
       TOut.emitTableType(WasmSym);
       return expect(AsmToken::EndOfStatement, "EOL");
@@ -1028,7 +1018,7 @@ public:
           Inst.setOpcode(Opc64);
         }
       }
-      if (!SkipTypeCheck && TC.typeCheck(IDLoc, Inst))
+      if (!SkipTypeCheck && TC.typeCheck(IDLoc, Inst, Operands))
         return true;
       Out.emitInstruction(Inst, getSTI());
       if (CurrentState == EndFunction) {
@@ -1068,7 +1058,7 @@ public:
     llvm_unreachable("Implement any new match types added!");
   }
 
-  void doBeforeLabelEmit(MCSymbol *Symbol) override {
+  void doBeforeLabelEmit(MCSymbol *Symbol, SMLoc IDLoc) override {
     // Code below only applies to labels in text sections.
     auto CWS = cast<MCSectionWasm>(getStreamer().getCurrentSection().first);
     if (!CWS || !CWS->getKind().isText())
@@ -1078,7 +1068,7 @@ public:
     // Unlike other targets, we don't allow data in text sections (labels
     // declared with .type @object).
     if (WasmSym->getType() == wasm::WASM_SYMBOL_TYPE_DATA) {
-      Parser.Error(Parser.getTok().getLoc(),
+      Parser.Error(IDLoc,
                    "Wasm doesn\'t support data symbols in text sections");
       return;
     }
@@ -1106,25 +1096,17 @@ public:
     auto *WS =
         getContext().getWasmSection(SecName, SectionKind::getText(), 0, Group,
                                     MCContext::GenericSectionID, nullptr);
-    getStreamer().SwitchSection(WS);
+    getStreamer().switchSection(WS);
     // Also generate DWARF for this section if requested.
     if (getContext().getGenDwarfForAssembly())
       getContext().addGenDwarfSection(WS);
   }
 
   void onEndOfFunction(SMLoc ErrorLoc) {
-    TC.endOfFunction(ErrorLoc);
-
-    // Automatically output a .size directive, so it becomes optional for the
-    // user.
-    if (!LastFunctionLabel) return;
-    auto TempSym = getContext().createLinkerPrivateTempSymbol();
-    getStreamer().emitLabel(TempSym);
-    auto Start = MCSymbolRefExpr::create(LastFunctionLabel, getContext());
-    auto End = MCSymbolRefExpr::create(TempSym, getContext());
-    auto Expr =
-        MCBinaryExpr::create(MCBinaryExpr::Sub, End, Start, getContext());
-    getStreamer().emitELFSize(LastFunctionLabel, Expr);
+    if (!SkipTypeCheck)
+      TC.endOfFunction(ErrorLoc);
+    // Reset the type checker state.
+    TC.Clear();
   }
 
   void onEndOfFile() override { ensureEmptyNestingStack(); }

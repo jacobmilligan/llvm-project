@@ -44,8 +44,8 @@ void ThreadContextLsanBase::OnFinished() {
   DTLS_Destroy();
 }
 
-u32 ThreadCreate(u32 parent_tid, uptr user_id, bool detached, void *arg) {
-  return thread_registry->CreateThread(user_id, detached, parent_tid, arg);
+u32 ThreadCreate(u32 parent_tid, bool detached, void *arg) {
+  return thread_registry->CreateThread(0, detached, parent_tid, arg);
 }
 
 void ThreadContextLsanBase::ThreadStart(u32 tid, tid_t os_id,
@@ -68,28 +68,6 @@ ThreadContext *CurrentThreadContext() {
   return (ThreadContext *)thread_registry->GetThreadLocked(GetCurrentThread());
 }
 
-static bool FindThreadByUid(ThreadContextBase *tctx, void *arg) {
-  uptr uid = (uptr)arg;
-  if (tctx->user_id == uid && tctx->status != ThreadStatusInvalid) {
-    return true;
-  }
-  return false;
-}
-
-u32 ThreadTid(uptr uid) {
-  return thread_registry->FindThread(FindThreadByUid, (void *)uid);
-}
-
-void ThreadDetach(u32 tid) {
-  CHECK_NE(tid, kInvalidTid);
-  thread_registry->DetachThread(tid, /* arg */ nullptr);
-}
-
-void ThreadJoin(u32 tid) {
-  CHECK_NE(tid, kInvalidTid);
-  thread_registry->JoinThread(tid, /* arg */ nullptr);
-}
-
 void EnsureMainThreadIDIsCorrect() {
   if (GetCurrentThread() == kMainTid)
     CurrentThreadContext()->os_id = GetTid();
@@ -104,9 +82,14 @@ void LockThreadRegistry() { thread_registry->Lock(); }
 
 void UnlockThreadRegistry() { thread_registry->Unlock(); }
 
-ThreadRegistry *GetThreadRegistryLocked() {
+ThreadRegistry *GetLsanThreadRegistryLocked() {
   thread_registry->CheckLocked();
   return thread_registry;
+}
+
+void RunCallbackForEachThreadLocked(
+    __sanitizer::ThreadRegistry::ThreadCallback cb, void *arg) {
+  GetLsanThreadRegistryLocked()->RunCallbackForEachThreadLocked(cb, arg);
 }
 
 }  // namespace __lsan

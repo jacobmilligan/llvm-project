@@ -9,49 +9,43 @@
 #ifndef LLVM_DEBUGINFO_DWARF_DWARFCONTEXT_H
 #define LLVM_DEBUGINFO_DWARF_DWARFCONTEXT_H
 
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/DebugInfo/DIContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
-#include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugAbbrev.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugAranges.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugMacro.h"
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
-#include "llvm/DebugInfo/DWARF/DWARFGdbIndex.h"
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
-#include "llvm/DebugInfo/DWARF/DWARFSection.h"
-#include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnitIndex.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Host.h"
 #include <cstdint>
-#include <deque>
-#include <map>
 #include <memory>
 
 namespace llvm {
 
-class MCRegisterInfo;
 class MemoryBuffer;
-class raw_ostream;
+class AppleAcceleratorTable;
+class DWARFCompileUnit;
+class DWARFDebugAbbrev;
+class DWARFDebugAranges;
+class DWARFDebugFrame;
+class DWARFDebugLoc;
+class DWARFDebugMacro;
+class DWARFDebugNames;
+class DWARFGdbIndex;
+class DWARFTypeUnit;
+class DWARFUnitIndex;
 
 /// DWARFContext
 /// This data structure is the top level entity that deals with dwarf debug
 /// information parsing. The actual data is supplied through DWARFObj.
 class DWARFContext : public DIContext {
   DWARFUnitVector NormalUnits;
+  std::optional<DenseMap<uint64_t, DWARFTypeUnit *>> NormalTypeUnits;
   std::unique_ptr<DWARFUnitIndex> CUIndex;
   std::unique_ptr<DWARFGdbIndex> GdbIndex;
   std::unique_ptr<DWARFUnitIndex> TUIndex;
@@ -70,6 +64,7 @@ class DWARFContext : public DIContext {
   std::unique_ptr<AppleAcceleratorTable> AppleObjC;
 
   DWARFUnitVector DWOUnits;
+  std::optional<DenseMap<uint64_t, DWARFTypeUnit *>> DWOTypeUnits;
   std::unique_ptr<DWARFDebugAbbrev> AbbrevDWO;
   std::unique_ptr<DWARFDebugMacro> MacinfoDWO;
   std::unique_ptr<DWARFDebugMacro> MacroDWO;
@@ -85,9 +80,6 @@ class DWARFContext : public DIContext {
   std::weak_ptr<DWOFile> DWP;
   bool CheckedForDWP = false;
   std::string DWPName;
-
-  std::unique_ptr<MCRegisterInfo> RegInfo;
-
   std::function<void(Error)> RecoverableErrorHandler =
       WithColor::defaultErrorHandler;
   std::function<void(Error)> WarningHandler = WithColor::defaultWarningHandler;
@@ -122,7 +114,7 @@ public:
                    WithColor::defaultErrorHandler,
                std::function<void(Error)> WarningHandler =
                    WithColor::defaultWarningHandler);
-  ~DWARFContext();
+  ~DWARFContext() override;
 
   DWARFContext(DWARFContext &) = delete;
   DWARFContext &operator=(DWARFContext &) = delete;
@@ -136,10 +128,10 @@ public:
   /// Dump a textual representation to \p OS. If any \p DumpOffsets are present,
   /// dump only the record at the specified offset.
   void dump(raw_ostream &OS, DIDumpOptions DumpOpts,
-            std::array<Optional<uint64_t>, DIDT_ID_Count> DumpOffsets);
+            std::array<std::optional<uint64_t>, DIDT_ID_Count> DumpOffsets);
 
   void dump(raw_ostream &OS, DIDumpOptions DumpOpts) override {
-    std::array<Optional<uint64_t>, DIDT_ID_Count> DumpOffsets;
+    std::array<std::optional<uint64_t>, DIDT_ID_Count> DumpOffsets;
     dump(OS, DumpOpts, DumpOffsets);
   }
 
@@ -154,6 +146,11 @@ public:
     return unit_iterator_range(NormalUnits.begin(),
                                NormalUnits.begin() +
                                    NormalUnits.getNumInfoUnits());
+  }
+
+  const DWARFUnitVector &getNormalUnitsVector() {
+    parseNormalUnits();
+    return NormalUnits;
   }
 
   /// Get units from .debug_types in this context.
@@ -182,6 +179,11 @@ public:
     parseDWOUnits();
     return unit_iterator_range(DWOUnits.begin(),
                                DWOUnits.begin() + DWOUnits.getNumInfoUnits());
+  }
+
+  const DWARFUnitVector &getDWOUnitsVector() {
+    parseDWOUnits();
+    return DWOUnits;
   }
 
   /// Get units from .debug_types.dwo in the DWO context.
@@ -243,6 +245,7 @@ public:
   }
 
   DWARFCompileUnit *getDWOCompileUnitForHash(uint64_t Hash);
+  DWARFTypeUnit *getTypeUnitForHash(uint16_t Version, uint64_t Hash, bool IsDWO);
 
   /// Return the compile unit that includes an offset (relative to .debug_info).
   DWARFCompileUnit *getCompileUnitForOffset(uint64_t Offset);
@@ -326,6 +329,10 @@ public:
   getLineTableForUnit(DWARFUnit *U,
                       function_ref<void(Error)> RecoverableErrorHandler);
 
+  // Clear the line table object corresponding to a compile unit for memory
+  // management purpose. When it's referred to again, it'll be re-populated.
+  void clearLineTableForUnit(DWARFUnit *U);
+
   DataExtractor getStringExtractor() const {
     return DataExtractor(DObj->getStrSection(), false, 0);
   }
@@ -353,6 +360,8 @@ public:
   DILineInfo getLineInfoForAddress(
       object::SectionedAddress Address,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) override;
+  DILineInfo
+  getLineInfoForDataAddress(object::SectionedAddress Address) override;
   DILineInfoTable getLineInfoForAddressRange(
       object::SectionedAddress Address, uint64_t Size,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) override;
@@ -395,8 +404,6 @@ public:
 
   std::shared_ptr<DWARFContext> getDWOContext(StringRef AbsolutePath);
 
-  const MCRegisterInfo *getRegisterInfo() const { return RegInfo.get(); }
-
   function_ref<void(Error)> getRecoverableErrorHandler() {
     return RecoverableErrorHandler;
   }
@@ -421,11 +428,6 @@ public:
              WithColor::defaultErrorHandler,
          std::function<void(Error)> WarningHandler =
              WithColor::defaultWarningHandler);
-
-  /// Loads register info for the architecture of the provided object file.
-  /// Improves readability of dumped DWARF expressions. Requires the caller to
-  /// have initialized the relevant target descriptions.
-  Error loadRegisterInfo(const object::ObjectFile &Obj);
 
   /// Get address size from CUs.
   /// TODO: refactor compile_units() to make this const.

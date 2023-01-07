@@ -18,14 +18,14 @@
 #include "Symbols.h"
 #include "Writer.h"
 #include "lld/Common/Args.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Driver.h"
-#include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Filesystem.h"
-#include "lld/Common/Memory.h"
 #include "lld/Common/Timer.h"
 #include "lld/Common/Version.h"
-#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/LTO/LTO.h"
@@ -46,53 +46,40 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ToolDrivers/llvm-lib/LibDriver.h"
 #include <algorithm>
 #include <future>
 #include <memory>
+#include <optional>
 
 using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::COFF;
 using namespace llvm::sys;
 
-namespace lld {
-namespace coff {
+namespace lld::coff {
 
-Configuration *config;
-LinkerDriver *driver;
+std::unique_ptr<Configuration> config;
+std::unique_ptr<LinkerDriver> driver;
 
-bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
-          raw_ostream &stderrOS) {
-  lld::stdoutOS = &stdoutOS;
-  lld::stderrOS = &stderrOS;
+bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+  // This driver-specific context will be freed later by lldMain().
+  auto *ctx = new COFFLinkerContext;
 
-  errorHandler().cleanupCallback = []() {
-    freeArena();
-  };
+  ctx->e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
+  ctx->e.logName = args::getFilenameWithoutExe(args[0]);
+  ctx->e.errorLimitExceededMsg = "too many errors emitted, stopping now"
+                                 " (use /errorlimit:0 to see all errors)";
 
-  errorHandler().logName = args::getFilenameWithoutExe(args[0]);
-  errorHandler().errorLimitExceededMsg =
-      "too many errors emitted, stopping now"
-      " (use /errorlimit:0 to see all errors)";
-  errorHandler().exitEarly = canExitEarly;
-  stderrOS.enable_colors(stderrOS.has_colors());
-
-  COFFLinkerContext ctx;
-  config = make<Configuration>();
-  driver = make<LinkerDriver>(ctx);
+  config = std::make_unique<Configuration>();
+  driver = std::make_unique<LinkerDriver>(*ctx);
 
   driver->linkerMain(args);
 
-  // Call exit() if we can to avoid calling destructors.
-  if (canExitEarly)
-    exitLld(errorCount() ? 1 : 0);
-
-  bool ret = errorCount() == 0;
-  if (!canExitEarly)
-    errorHandler().reset();
-  return ret;
+  return errorCount() == 0;
 }
 
 // Parse options of the form "old;new".
@@ -162,8 +149,23 @@ static std::future<MBErrPair> createFutureForFile(std::string path) {
 static StringRef mangle(StringRef sym) {
   assert(config->machine != IMAGE_FILE_MACHINE_UNKNOWN);
   if (config->machine == I386)
-    return saver.save("_" + sym);
+    return saver().save("_" + sym);
   return sym;
+}
+
+static llvm::Triple::ArchType getArch() {
+  switch (config->machine) {
+  case I386:
+    return llvm::Triple::ArchType::x86;
+  case AMD64:
+    return llvm::Triple::ArchType::x86_64;
+  case ARMNT:
+    return llvm::Triple::ArchType::arm;
+  case ARM64:
+    return llvm::Triple::ArchType::aarch64;
+  default:
+    return llvm::Triple::ArchType::UnknownArch;
+  }
 }
 
 bool LinkerDriver::findUnderscoreMangle(StringRef sym) {
@@ -208,17 +210,11 @@ void LinkerDriver::addBuffer(std::unique_ptr<MemoryBuffer> mb,
     ctx.symtab.addFile(make<ArchiveFile>(ctx, mbref));
     break;
   case file_magic::bitcode:
-    if (lazy)
-      ctx.symtab.addFile(make<LazyObjFile>(ctx, mbref));
-    else
-      ctx.symtab.addFile(make<BitcodeFile>(ctx, mbref, "", 0));
+    ctx.symtab.addFile(make<BitcodeFile>(ctx, mbref, "", 0, lazy));
     break;
   case file_magic::coff_object:
   case file_magic::coff_import_library:
-    if (lazy)
-      ctx.symtab.addFile(make<LazyObjFile>(ctx, mbref));
-    else
-      ctx.symtab.addFile(make<ObjFile>(ctx, mbref));
+    ctx.symtab.addFile(make<ObjFile>(ctx, mbref, lazy));
     break;
   case file_magic::pdb:
     ctx.symtab.addFile(make<PDBInputFile>(ctx, mbref));
@@ -236,7 +232,7 @@ void LinkerDriver::addBuffer(std::unique_ptr<MemoryBuffer> mb,
                        "import library?");
       break;
     }
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   default:
     error(mbref.getBufferIdentifier() + ": unknown file type");
     break;
@@ -282,7 +278,12 @@ void LinkerDriver::addArchiveBuffer(MemoryBufferRef mb, StringRef symName,
   if (magic == file_magic::coff_object) {
     obj = make<ObjFile>(ctx, mb);
   } else if (magic == file_magic::bitcode) {
-    obj = make<BitcodeFile>(ctx, mb, parentName, offsetInArchive);
+    obj =
+        make<BitcodeFile>(ctx, mb, parentName, offsetInArchive, /*lazy=*/false);
+  } else if (magic == file_magic::coff_cl_gl_object) {
+    error(mb.getBufferIdentifier() +
+          ": is not a native COFF file. Recompile without /GL?");
+    return;
   } else {
     error("unknown file type: " + mb.getBufferIdentifier());
     return;
@@ -363,9 +364,9 @@ void LinkerDriver::parseDirectives(InputFile *file) {
     Export exp = parseExport(e);
     if (config->machine == I386 && config->mingw) {
       if (!isDecorated(exp.name))
-        exp.name = saver.save("_" + exp.name);
+        exp.name = saver().save("_" + exp.name);
       if (!exp.extName.empty() && !isDecorated(exp.extName))
-        exp.extName = saver.save("_" + exp.extName);
+        exp.extName = saver().save("_" + exp.extName);
     }
     exp.directives = true;
     config->exports.push_back(exp);
@@ -374,6 +375,14 @@ void LinkerDriver::parseDirectives(InputFile *file) {
   // Handle /include: in bulk.
   for (StringRef inc : directives.includes)
     addUndefined(inc);
+
+  // Handle /exclude-symbols: in bulk.
+  for (StringRef e : directives.excludes) {
+    SmallVector<StringRef, 2> vec;
+    e.split(vec, ',');
+    for (StringRef sym : vec)
+      excludedSymbols.insert(mangle(sym));
+  }
 
   // https://docs.microsoft.com/en-us/cpp/preprocessor/comment-c-cpp?view=msvc-160
   for (auto *arg : directives.args) {
@@ -385,7 +394,7 @@ void LinkerDriver::parseDirectives(InputFile *file) {
       parseAlternateName(arg->getValue());
       break;
     case OPT_defaultlib:
-      if (Optional<StringRef> path = findLib(arg->getValue()))
+      if (std::optional<StringRef> path = findLib(arg->getValue()))
         enqueuePath(*path, false, false);
       break;
     case OPT_entry:
@@ -405,6 +414,9 @@ void LinkerDriver::parseDirectives(InputFile *file) {
       break;
     case OPT_nodefaultlib:
       config->noDefaultLibs.insert(doFindLib(arg->getValue()).lower());
+      break;
+    case OPT_release:
+      config->writeCheckSum = true;
       break;
     case OPT_section:
       parseSection(arg->getValue());
@@ -439,44 +451,53 @@ void LinkerDriver::parseDirectives(InputFile *file) {
 // Find file from search paths. You can omit ".obj", this function takes
 // care of that. Note that the returned path is not guaranteed to exist.
 StringRef LinkerDriver::doFindFile(StringRef filename) {
+  auto getFilename = [](StringRef filename) -> StringRef {
+    if (config->vfs)
+      if (auto statOrErr = config->vfs->status(filename))
+        return saver().save(statOrErr->getName());
+    return filename;
+  };
+
   bool hasPathSep = (filename.find_first_of("/\\") != StringRef::npos);
   if (hasPathSep)
-    return filename;
+    return getFilename(filename);
   bool hasExt = filename.contains('.');
   for (StringRef dir : searchPaths) {
     SmallString<128> path = dir;
     sys::path::append(path, filename);
+    path = SmallString<128>{getFilename(path.str())};
     if (sys::fs::exists(path.str()))
-      return saver.save(path.str());
+      return saver().save(path.str());
     if (!hasExt) {
       path.append(".obj");
+      path = SmallString<128>{getFilename(path.str())};
       if (sys::fs::exists(path.str()))
-        return saver.save(path.str());
+        return saver().save(path.str());
     }
   }
   return filename;
 }
 
-static Optional<sys::fs::UniqueID> getUniqueID(StringRef path) {
+static std::optional<sys::fs::UniqueID> getUniqueID(StringRef path) {
   sys::fs::UniqueID ret;
   if (sys::fs::getUniqueID(path, ret))
-    return None;
+    return std::nullopt;
   return ret;
 }
 
 // Resolves a file path. This never returns the same path
-// (in that case, it returns None).
-Optional<StringRef> LinkerDriver::findFile(StringRef filename) {
+// (in that case, it returns std::nullopt).
+std::optional<StringRef> LinkerDriver::findFile(StringRef filename) {
   StringRef path = doFindFile(filename);
 
-  if (Optional<sys::fs::UniqueID> id = getUniqueID(path)) {
+  if (std::optional<sys::fs::UniqueID> id = getUniqueID(path)) {
     bool seen = !visitedFiles.insert(*id).second;
     if (seen)
-      return None;
+      return std::nullopt;
   }
 
   if (path.endswith_insensitive(".lib"))
-    visitedLibs.insert(std::string(sys::path::filename(path)));
+    visitedLibs.insert(std::string(sys::path::filename(path).lower()));
   return path;
 }
 
@@ -488,7 +509,7 @@ StringRef LinkerDriver::doFindLibMinGW(StringRef filename) {
 
   SmallString<128> s = filename;
   sys::path::replace_extension(s, ".a");
-  StringRef libName = saver.save("lib" + s.str());
+  StringRef libName = saver().save("lib" + s.str());
   return doFindFile(libName);
 }
 
@@ -497,7 +518,7 @@ StringRef LinkerDriver::doFindLib(StringRef filename) {
   // Add ".lib" to Filename if that has no file extension.
   bool hasExt = filename.contains('.');
   if (!hasExt)
-    filename = saver.save(filename + ".lib");
+    filename = saver().save(filename + ".lib");
   StringRef ret = doFindFile(filename);
   // For MinGW, if the find above didn't turn up anything, try
   // looking for a MinGW formatted library name.
@@ -508,29 +529,124 @@ StringRef LinkerDriver::doFindLib(StringRef filename) {
 
 // Resolves a library path. /nodefaultlib options are taken into
 // consideration. This never returns the same path (in that case,
-// it returns None).
-Optional<StringRef> LinkerDriver::findLib(StringRef filename) {
+// it returns std::nullopt).
+std::optional<StringRef> LinkerDriver::findLib(StringRef filename) {
   if (config->noDefaultLibAll)
-    return None;
+    return std::nullopt;
   if (!visitedLibs.insert(filename.lower()).second)
-    return None;
+    return std::nullopt;
 
   StringRef path = doFindLib(filename);
   if (config->noDefaultLibs.count(path.lower()))
-    return None;
+    return std::nullopt;
 
-  if (Optional<sys::fs::UniqueID> id = getUniqueID(path))
+  if (std::optional<sys::fs::UniqueID> id = getUniqueID(path))
     if (!visitedFiles.insert(*id).second)
-      return None;
+      return std::nullopt;
   return path;
+}
+
+void LinkerDriver::detectWinSysRoot(const opt::InputArgList &Args) {
+  IntrusiveRefCntPtr<vfs::FileSystem> VFS = vfs::getRealFileSystem();
+
+  // Check the command line first, that's the user explicitly telling us what to
+  // use. Check the environment next, in case we're being invoked from a VS
+  // command prompt. Failing that, just try to find the newest Visual Studio
+  // version we can and use its default VC toolchain.
+  std::optional<StringRef> VCToolsDir, VCToolsVersion, WinSysRoot;
+  if (auto *A = Args.getLastArg(OPT_vctoolsdir))
+    VCToolsDir = A->getValue();
+  if (auto *A = Args.getLastArg(OPT_vctoolsversion))
+    VCToolsVersion = A->getValue();
+  if (auto *A = Args.getLastArg(OPT_winsysroot))
+    WinSysRoot = A->getValue();
+  if (!findVCToolChainViaCommandLine(*VFS, VCToolsDir, VCToolsVersion,
+                                     WinSysRoot, vcToolChainPath, vsLayout) &&
+      (Args.hasArg(OPT_lldignoreenv) ||
+       !findVCToolChainViaEnvironment(*VFS, vcToolChainPath, vsLayout)) &&
+      !findVCToolChainViaSetupConfig(*VFS, vcToolChainPath, vsLayout) &&
+      !findVCToolChainViaRegistry(vcToolChainPath, vsLayout))
+    return;
+
+  // If the VC environment hasn't been configured (perhaps because the user did
+  // not run vcvarsall), try to build a consistent link environment.  If the
+  // environment variable is set however, assume the user knows what they're
+  // doing. If the user passes /vctoolsdir or /winsdkdir, trust that over env
+  // vars.
+  if (const auto *A = Args.getLastArg(OPT_diasdkdir, OPT_winsysroot)) {
+    diaPath = A->getValue();
+    if (A->getOption().getID() == OPT_winsysroot)
+      path::append(diaPath, "DIA SDK");
+  }
+  useWinSysRootLibPath = Args.hasArg(OPT_lldignoreenv) ||
+                         !Process::GetEnv("LIB") ||
+                         Args.getLastArg(OPT_vctoolsdir, OPT_winsysroot);
+  if (Args.hasArg(OPT_lldignoreenv) || !Process::GetEnv("LIB") ||
+      Args.getLastArg(OPT_winsdkdir, OPT_winsysroot)) {
+    std::optional<StringRef> WinSdkDir, WinSdkVersion;
+    if (auto *A = Args.getLastArg(OPT_winsdkdir))
+      WinSdkDir = A->getValue();
+    if (auto *A = Args.getLastArg(OPT_winsdkversion))
+      WinSdkVersion = A->getValue();
+
+    if (useUniversalCRT(vsLayout, vcToolChainPath, getArch(), *VFS)) {
+      std::string UniversalCRTSdkPath;
+      std::string UCRTVersion;
+      if (getUniversalCRTSdkDir(*VFS, WinSdkDir, WinSdkVersion, WinSysRoot,
+                                UniversalCRTSdkPath, UCRTVersion)) {
+        universalCRTLibPath = UniversalCRTSdkPath;
+        path::append(universalCRTLibPath, "Lib", UCRTVersion, "ucrt");
+      }
+    }
+
+    std::string sdkPath;
+    std::string windowsSDKIncludeVersion;
+    std::string windowsSDKLibVersion;
+    if (getWindowsSDKDir(*VFS, WinSdkDir, WinSdkVersion, WinSysRoot, sdkPath,
+                         sdkMajor, windowsSDKIncludeVersion,
+                         windowsSDKLibVersion)) {
+      windowsSdkLibPath = sdkPath;
+      path::append(windowsSdkLibPath, "Lib");
+      if (sdkMajor >= 8)
+        path::append(windowsSdkLibPath, windowsSDKLibVersion, "um");
+    }
+  }
+}
+
+void LinkerDriver::addWinSysRootLibSearchPaths() {
+  if (!diaPath.empty()) {
+    // The DIA SDK always uses the legacy vc arch, even in new MSVC versions.
+    path::append(diaPath, "lib", archToLegacyVCArch(getArch()));
+    searchPaths.push_back(saver().save(diaPath.str()));
+  }
+  if (useWinSysRootLibPath) {
+    searchPaths.push_back(saver().save(getSubDirectoryPath(
+        SubDirectoryType::Lib, vsLayout, vcToolChainPath, getArch())));
+    searchPaths.push_back(saver().save(
+        getSubDirectoryPath(SubDirectoryType::Lib, vsLayout, vcToolChainPath,
+                            getArch(), "atlmfc")));
+  }
+  if (!universalCRTLibPath.empty()) {
+    StringRef ArchName = archToWindowsSDKArch(getArch());
+    if (!ArchName.empty()) {
+      path::append(universalCRTLibPath, ArchName);
+      searchPaths.push_back(saver().save(universalCRTLibPath.str()));
+    }
+  }
+  if (!windowsSdkLibPath.empty()) {
+    std::string path;
+    if (appendArchToWindowsSDKLibPath(sdkMajor, windowsSdkLibPath, getArch(),
+                                      path))
+      searchPaths.push_back(saver().save(path));
+  }
 }
 
 // Parses LIB environment which contains a list of search paths.
 void LinkerDriver::addLibSearchPaths() {
-  Optional<std::string> envOpt = Process::GetEnv("LIB");
-  if (!envOpt.hasValue())
+  std::optional<std::string> envOpt = Process::GetEnv("LIB");
+  if (!envOpt)
     return;
-  StringRef env = saver.save(*envOpt);
+  StringRef env = saver().save(*envOpt);
   while (!env.empty()) {
     StringRef path;
     std::tie(path, env) = env.split(';');
@@ -647,6 +763,7 @@ static std::string createResponseFile(const opt::InputArgList &args,
     case OPT_INPUT:
     case OPT_defaultlib:
     case OPT_libpath:
+    case OPT_winsysroot:
       break;
     case OPT_call_graph_ordering_file:
     case OPT_deffile:
@@ -815,6 +932,7 @@ static void createImportLibrary(bool asLib) {
     e2.Name = std::string(e1.name);
     e2.SymbolName = std::string(e1.symbolName);
     e2.ExtName = std::string(e1.extName);
+    e2.AliasTarget = std::string(e1.aliasTarget);
     e2.Ordinal = e1.ordinal;
     e2.Noname = e1.noname;
     e2.Data = e1.data;
@@ -877,8 +995,8 @@ static void parseModuleDefs(StringRef path) {
   driver->takeBuffer(std::move(mb));
 
   if (config->outputFile.empty())
-    config->outputFile = std::string(saver.save(m.OutputFile));
-  config->importName = std::string(saver.save(m.ImportName));
+    config->outputFile = std::string(saver().save(m.OutputFile));
+  config->importName = std::string(saver().save(m.ImportName));
   if (m.ImageBase)
     config->imageBase = m.ImageBase;
   if (m.StackReserve)
@@ -906,13 +1024,14 @@ static void parseModuleDefs(StringRef path) {
     // DLL instead. This is supported by both MS and GNU linkers.
     if (!e1.ExtName.empty() && e1.ExtName != e1.Name &&
         StringRef(e1.Name).contains('.')) {
-      e2.name = saver.save(e1.ExtName);
-      e2.forwardTo = saver.save(e1.Name);
+      e2.name = saver().save(e1.ExtName);
+      e2.forwardTo = saver().save(e1.Name);
       config->exports.push_back(e2);
       continue;
     }
-    e2.name = saver.save(e1.Name);
-    e2.extName = saver.save(e1.ExtName);
+    e2.name = saver().save(e1.Name);
+    e2.extName = saver().save(e1.ExtName);
+    e2.aliasTarget = saver().save(e1.AliasTarget);
     e2.ordinal = e1.Ordinal;
     e2.noname = e1.Noname;
     e2.data = e1.Data;
@@ -1202,11 +1321,18 @@ void LinkerDriver::maybeExportMinGWSymbols(const opt::InputArgList &args) {
       return;
   }
 
-  AutoExporter exporter;
+  AutoExporter exporter(excludedSymbols);
 
   for (auto *arg : args.filtered(OPT_wholearchive_file))
-    if (Optional<StringRef> path = doFindFile(arg->getValue()))
+    if (std::optional<StringRef> path = doFindFile(arg->getValue()))
       exporter.addWholeArchive(*path);
+
+  for (auto *arg : args.filtered(OPT_exclude_symbols)) {
+    SmallVector<StringRef, 2> vec;
+    StringRef(arg->getValue()).split(vec, ',');
+    for (StringRef sym : vec)
+      exporter.addExcludedSymbol(mangle(sym));
+  }
 
   ctx.symtab.forEachSymbol([&](Symbol *s) {
     auto *def = dyn_cast<Defined>(s);
@@ -1236,7 +1362,7 @@ void LinkerDriver::maybeExportMinGWSymbols(const opt::InputArgList &args) {
 // /linkrepro and /reproduce are very similar, but /linkrepro takes a directory
 // name while /reproduce takes a full path. We have /linkrepro for compatibility
 // with Microsoft link.exe.
-Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
+std::optional<std::string> getReproduceFile(const opt::InputArgList &args) {
   if (auto *arg = args.getLastArg(OPT_reproduce))
     return std::string(arg->getValue());
 
@@ -1251,7 +1377,29 @@ Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
   if (auto *path = getenv("LLD_REPRODUCE"))
     return std::string(path);
 
-  return None;
+  return std::nullopt;
+}
+
+static std::unique_ptr<llvm::vfs::FileSystem>
+getVFS(const opt::InputArgList &args) {
+  using namespace llvm::vfs;
+
+  const opt::Arg *arg = args.getLastArg(OPT_vfsoverlay);
+  if (!arg)
+    return nullptr;
+
+  auto bufOrErr = llvm::MemoryBuffer::getFile(arg->getValue());
+  if (!bufOrErr) {
+    checkError(errorCodeToError(bufOrErr.getError()));
+    return nullptr;
+  }
+
+  if (auto ret = vfs::getVFSFromYAML(std::move(*bufOrErr), /*DiagHandler*/ nullptr,
+                             arg->getValue()))
+    return ret;
+
+  error("Invalid vfs overlay");
+  return nullptr;
 }
 
 void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
@@ -1281,8 +1429,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // Parse and evaluate -mllvm options.
   std::vector<const char *> v;
   v.push_back("lld-link (LLVM option parsing)");
-  for (auto *arg : args.filtered(OPT_mllvm))
+  for (const auto *arg : args.filtered(OPT_mllvm)) {
     v.push_back(arg->getValue());
+    config->mllvmOpts.emplace_back(arg->getValue());
+  }
   cl::ResetAllOptionOccurrences();
   cl::ParseCommandLineOptions(v.size(), v.data());
 
@@ -1294,6 +1444,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       error(arg->getSpelling() + " number expected, but got " + s);
     errorHandler().errorLimit = n;
   }
+
+  config->vfs = getVFS(args);
 
   // Handle /help
   if (args.hasArg(OPT_help)) {
@@ -1329,9 +1481,12 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // Handle /lldmingw early, since it can potentially affect how other
   // options are handled.
   config->mingw = args.hasArg(OPT_lldmingw);
+  if (config->mingw)
+    ctx.e.errorLimitExceededMsg = "too many errors emitted, stopping now"
+                                  " (use --error-limit=0 to see all errors)";
 
   // Handle /linkrepro and /reproduce.
-  if (Optional<std::string> path = getReproduceFile(args)) {
+  if (std::optional<std::string> path = getReproduceFile(args)) {
     Expected<std::unique_ptr<TarWriter>> errOrWriter =
         TarWriter::create(*path, sys::path::stem(*path));
 
@@ -1354,7 +1509,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   searchPaths.push_back("");
   for (auto *arg : args.filtered(OPT_libpath))
     searchPaths.push_back(arg->getValue());
-  if (!args.hasArg(OPT_lldignoreenv))
+  detectWinSysRoot(args);
+  if (!args.hasArg(OPT_lldignoreenv) && !args.hasArg(OPT_winsysroot))
     addLibSearchPaths();
 
   // Handle /ignore
@@ -1404,7 +1560,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   }
 
   // Handle /demangle
-  config->demangle = args.hasFlag(OPT_demangle, OPT_demangle_no);
+  config->demangle = args.hasFlag(OPT_demangle, OPT_demangle_no, true);
 
   // Handle /debugtype
   config->debugTypes = parseDebugTypes(args);
@@ -1428,6 +1584,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       config->pdbPath = arg->getValue();
     if (auto *arg = args.getLastArg(OPT_pdbaltpath))
       config->pdbAltPath = arg->getValue();
+    if (auto *arg = args.getLastArg(OPT_pdbpagesize))
+      parsePDBPageSize(arg->getValue());
     if (args.hasArg(OPT_natvis))
       config->natvisFiles = args.getAllArgValues(OPT_natvis);
     if (args.hasArg(OPT_pdbstream)) {
@@ -1492,6 +1650,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     config->machine = getMachineType(arg->getValue());
     if (config->machine == IMAGE_FILE_MACHINE_UNKNOWN)
       fatal(Twine("unknown /machine argument: ") + arg->getValue());
+    addWinSysRootLibSearchPaths();
   }
 
   // Handle /nodefaultlib:<filename>
@@ -1574,13 +1733,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (auto *arg = args.getLastArg(OPT_implib))
     config->implib = arg->getValue();
 
+  config->noimplib = args.hasArg(OPT_noimplib);
+
   // Handle /opt.
   bool doGC = debug == DebugKind::None || args.hasArg(OPT_profile);
-  Optional<ICFLevel> icfLevel = None;
+  std::optional<ICFLevel> icfLevel;
   if (args.hasArg(OPT_profile))
     icfLevel = ICFLevel::None;
   unsigned tailMerge = 1;
-  bool ltoNewPM = LLVM_ENABLE_NEW_PASS_MANAGER;
   bool ltoDebugPM = false;
   for (auto *arg : args.filtered(OPT_opt)) {
     std::string str = StringRef(arg->getValue()).lower();
@@ -1602,9 +1762,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       } else if (s == "nolldtailmerge") {
         tailMerge = 0;
       } else if (s == "ltonewpassmanager") {
-        ltoNewPM = true;
-      } else if (s == "noltonewpassmanager") {
-        ltoNewPM = false;
+        /* We always use the new PM. */
       } else if (s == "ltodebugpassmanager") {
         ltoDebugPM = true;
       } else if (s == "noltodebugpassmanager") {
@@ -1631,10 +1789,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (!icfLevel)
     icfLevel = doGC ? ICFLevel::All : ICFLevel::None;
   config->doGC = doGC;
-  config->doICF = icfLevel.getValue();
+  config->doICF = *icfLevel;
   config->tailMerge =
       (tailMerge == 1 && config->doICF != ICFLevel::None) || tailMerge == 2;
-  config->ltoNewPassManager = ltoNewPM;
   config->ltoDebugPassManager = ltoDebugPM;
 
   // Handle /lldsavetemps
@@ -1771,15 +1928,6 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (config->mingw || config->debugDwarf)
     config->warnLongSectionNames = false;
 
-  config->lldmapFile = getMapFile(args, OPT_lldmap, OPT_lldmap_file);
-  config->mapFile = getMapFile(args, OPT_map, OPT_map_file);
-
-  if (config->lldmapFile != "" && config->lldmapFile == config->mapFile) {
-    warn("/lldmap and /map have the same output file '" + config->mapFile +
-         "'.\n>>> ignoring /lldmap");
-    config->lldmapFile.clear();
-  }
-
   if (config->incremental && args.hasArg(OPT_profile)) {
     warn("ignoring '/incremental' due to '/profile' specification");
     config->incremental = false;
@@ -1807,8 +1955,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
 
   std::set<sys::fs::UniqueID> wholeArchives;
   for (auto *arg : args.filtered(OPT_wholearchive_file))
-    if (Optional<StringRef> path = doFindFile(arg->getValue()))
-      if (Optional<sys::fs::UniqueID> id = getUniqueID(*path))
+    if (std::optional<StringRef> path = doFindFile(arg->getValue()))
+      if (std::optional<sys::fs::UniqueID> id = getUniqueID(*path))
         wholeArchives.insert(*id);
 
   // A predicate returning true if a given path is an argument for
@@ -1818,7 +1966,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   auto isWholeArchive = [&](StringRef path) -> bool {
     if (args.hasArg(OPT_wholearchive_flag))
       return true;
-    if (Optional<sys::fs::UniqueID> id = getUniqueID(path))
+    if (std::optional<sys::fs::UniqueID> id = getUniqueID(path))
       return wholeArchives.count(*id);
     return false;
   };
@@ -1840,11 +1988,11 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       inLib = true;
       break;
     case OPT_wholearchive_file:
-      if (Optional<StringRef> path = findFile(arg->getValue()))
+      if (std::optional<StringRef> path = findFile(arg->getValue()))
         enqueuePath(*path, true, inLib);
       break;
     case OPT_INPUT:
-      if (Optional<StringRef> path = findFile(arg->getValue()))
+      if (std::optional<StringRef> path = findFile(arg->getValue()))
         enqueuePath(*path, isWholeArchive(*path), inLib);
       break;
     default:
@@ -1853,15 +2001,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     }
   }
 
-  // Process files specified as /defaultlib. These should be enequeued after
-  // other files, which is why they are in a separate loop.
-  for (auto *arg : args.filtered(OPT_defaultlib))
-    if (Optional<StringRef> path = findLib(arg->getValue()))
-      enqueuePath(*path, false, false);
-
   // Read all input files given via the command line.
   run();
-
   if (errorCount())
     return;
 
@@ -1870,9 +2011,23 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (config->machine == IMAGE_FILE_MACHINE_UNKNOWN) {
     warn("/machine is not specified. x64 is assumed");
     config->machine = AMD64;
+    addWinSysRootLibSearchPaths();
   }
   config->wordsize = config->is64() ? 8 : 4;
 
+  // Process files specified as /defaultlib. These must be processed after
+  // addWinSysRootLibSearchPaths(), which is why they are in a separate loop.
+  for (auto *arg : args.filtered(OPT_defaultlib))
+    if (std::optional<StringRef> path = findLib(arg->getValue()))
+      enqueuePath(*path, false, false);
+  run();
+  if (errorCount())
+    return;
+
+  // Handle /RELEASE
+  if (args.hasArg(OPT_release))
+    config->writeCheckSum = true;
+  
   // Handle /safeseh, x86 only, on by default, except for mingw.
   if (config->machine == I386) {
     config->safeSEH = args.hasFlag(OPT_safeseh, OPT_safeseh_no, !config->mingw);
@@ -1883,10 +2038,11 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   for (auto *arg : args.filtered(OPT_functionpadmin, OPT_functionpadmin_opt))
     parseFunctionPadMin(arg, config->machine);
 
-  if (tar)
+  if (tar) {
     tar->append("response.txt",
                 createResponseFile(args, filePaths,
                                    ArrayRef<StringRef>(searchPaths).slice(1)));
+  }
 
   // Handle /largeaddressaware
   config->largeAddressAware = args.hasFlag(
@@ -1907,9 +2063,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     Export e = parseExport(arg->getValue());
     if (config->machine == I386) {
       if (!isDecorated(e.name))
-        e.name = saver.save("_" + e.name);
+        e.name = saver().save("_" + e.name);
       if (!e.extName.empty() && !isDecorated(e.extName))
-        e.extName = saver.save("_" + e.extName);
+        e.extName = saver().save("_" + e.extName);
     }
     config->exports.push_back(e);
   }
@@ -1923,7 +2079,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // Handle generation of import library from a def file.
   if (!args.hasArg(OPT_INPUT, OPT_wholearchive_file)) {
     fixupExports();
-    createImportLibrary(/*asLib=*/true);
+    if (!config->noimplib)
+      createImportLibrary(/*asLib=*/true);
     return;
   }
 
@@ -1978,6 +2135,25 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (auto e = tryCreateFile(config->outputFile)) {
     error("cannot open output file " + config->outputFile + ": " + e.message());
     return;
+  }
+
+  config->lldmapFile = getMapFile(args, OPT_lldmap, OPT_lldmap_file);
+  config->mapFile = getMapFile(args, OPT_map, OPT_map_file);
+
+  if (config->mapFile != "" && args.hasArg(OPT_map_info)) {
+    for (auto *arg : args.filtered(OPT_map_info)) {
+      std::string s = StringRef(arg->getValue()).lower();
+      if (s == "exports")
+        config->mapInfo = true;
+      else
+        error("unknown option: /mapinfo:" + s);
+    }
+  }
+
+  if (config->lldmapFile != "" && config->lldmapFile == config->mapFile) {
+    warn("/lldmap and /map have the same output file '" + config->mapFile +
+         "'.\n>>> ignoring /lldmap");
+    config->lldmapFile.clear();
   }
 
   if (shouldCreatePDB) {
@@ -2078,15 +2254,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     // Windows specific -- if __load_config_used can be resolved, resolve it.
     if (ctx.symtab.findUnderscore("_load_config_used"))
       addUndefined(mangle("_load_config_used"));
-  } while (run());
 
-  if (args.hasArg(OPT_include_optional)) {
-    // Handle /includeoptional
-    for (auto *arg : args.filtered(OPT_include_optional))
-      if (dyn_cast_or_null<LazyArchive>(ctx.symtab.find(arg->getValue())))
-        addUndefined(arg->getValue());
-    while (run());
-  }
+    if (args.hasArg(OPT_include_optional)) {
+      // Handle /includeoptional
+      for (auto *arg : args.filtered(OPT_include_optional))
+        if (isa_and_nonnull<LazyArchive>(ctx.symtab.find(arg->getValue())))
+          addUndefined(arg->getValue());
+    }
+  } while (run());
 
   // Create wrapped symbols for -wrap option.
   std::vector<WrappedSymbol> wrapped = addWrappedSymbols(ctx, args);
@@ -2138,11 +2313,11 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // Do LTO by compiling bitcode input files to a set of native COFF files then
   // link those files (unless -thinlto-index-only was given, in which case we
   // resolve symbols and write indices, but don't generate native code or link).
-  ctx.symtab.addCombinedLTOObjects();
+  ctx.symtab.compileBitcodeFiles();
 
   // If -thinlto-index-only is given, we should create only "index
   // files" and not object files. Index file creation is already done
-  // in addCombinedLTOObject, so we are done if that's the case.
+  // in compileBitcodeFiles, so we are done if that's the case.
   if (config->thinLTOIndexOnly)
     return;
 
@@ -2182,7 +2357,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // -implib option is given explicitly, for compatibility with GNU ld.
   if (!config->exports.empty() || config->dll) {
     fixupExports();
-    if (!config->mingw || !config->implib.empty())
+    if (!config->noimplib && (!config->mingw || !config->implib.empty()))
       createImportLibrary(/*asLib=*/false);
     assignExportOrdinals();
   }
@@ -2253,7 +2428,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       // For now, just manually try to retain the known possible personality
       // functions. This doesn't bring in more object files, but only marks
       // functions that already have been included to be retained.
-      for (const char *n : {"__gxx_personality_v0", "__gcc_personality_v0"}) {
+      for (const char *n : {"__gxx_personality_v0", "__gcc_personality_v0",
+                            "rust_eh_personality"}) {
         Defined *d = dyn_cast_or_null<Defined>(ctx.symtab.findUnderscore(n));
         if (d && !d->isGCRoot) {
           d->isGCRoot = true;
@@ -2283,5 +2459,4 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     ctx.rootTimer.print();
 }
 
-} // namespace coff
-} // namespace lld
+} // namespace lld::coff

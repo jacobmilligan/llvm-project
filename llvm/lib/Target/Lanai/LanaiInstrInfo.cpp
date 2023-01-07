@@ -50,7 +50,7 @@ void LanaiInstrInfo::storeRegToStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Position,
     Register SourceRegister, bool IsKill, int FrameIndex,
     const TargetRegisterClass *RegisterClass,
-    const TargetRegisterInfo * /*RegisterInfo*/) const {
+    const TargetRegisterInfo * /*RegisterInfo*/, Register /*VReg*/) const {
   DebugLoc DL;
   if (Position != MBB.end()) {
     DL = Position->getDebugLoc();
@@ -70,7 +70,7 @@ void LanaiInstrInfo::loadRegFromStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Position,
     Register DestinationRegister, int FrameIndex,
     const TargetRegisterClass *RegisterClass,
-    const TargetRegisterInfo * /*RegisterInfo*/) const {
+    const TargetRegisterInfo * /*RegisterInfo*/, Register /*VReg*/) const {
   DebugLoc DL;
   if (Position != MBB.end()) {
     DL = Position->getDebugLoc();
@@ -171,7 +171,7 @@ LanaiInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
       {MO_ABS_HI, "lanai-hi"},
       {MO_ABS_LO, "lanai-lo"},
       {MO_NO_FLAG, "lanai-nf"}};
-  return makeArrayRef(TargetFlags);
+  return ArrayRef(TargetFlags);
 }
 
 bool LanaiInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
@@ -419,10 +419,8 @@ bool LanaiInstrInfo::optimizeCompareInstr(
     // live-out. If it is live-out, do not optimize.
     if (!isSafe) {
       MachineBasicBlock *MBB = CmpInstr.getParent();
-      for (MachineBasicBlock::succ_iterator SI = MBB->succ_begin(),
-                                            SE = MBB->succ_end();
-           SI != SE; ++SI)
-        if ((*SI)->isLiveIn(Lanai::SR))
+      for (const MachineBasicBlock *Succ : MBB->successors())
+        if (Succ->isLiveIn(Lanai::SR))
           return false;
     }
 
@@ -469,8 +467,7 @@ static MachineInstr *canFoldIntoSelect(Register Reg,
     return nullptr;
   // Check if MI has any non-dead defs or physreg uses. This also detects
   // predicated instructions which will be reading SR.
-  for (unsigned i = 1, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI->getOperand(i);
+  for (const MachineOperand &MO : llvm::drop_begin(MI->operands(), 1)) {
     // Reject frame index operands.
     if (MO.isFI() || MO.isCPI() || MO.isJTI())
       return nullptr;
@@ -595,9 +592,7 @@ bool LanaiInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
       }
 
       // If the block has any instructions after a branch, delete them.
-      while (std::next(Instruction) != MBB.end()) {
-        std::next(Instruction)->eraseFromParent();
-      }
+      MBB.erase(std::next(Instruction), MBB.end());
 
       Condition.clear();
       FalseBlock = nullptr;

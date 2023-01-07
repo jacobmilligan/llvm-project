@@ -8,14 +8,14 @@ set(LLVM_LINK_COMPONENTS
   Object
   Support
   Symbolize
+  TargetParser
   )
 
 set(exegesis_sources
   BenchmarkRunnerTest.cpp
   ClusteringTest.cpp
-  PerfHelperTest.cpp
+  ProgressMeterTest.cpp
   RegisterValueTest.cpp
-  SnippetGeneratorTest.cpp
   )
 
 set(exegesis_link_libraries LLVMExegesis)
@@ -63,3 +63,5 @@ add_llvm_target_unittest(LLVMExegesisTests
   ${exegesis_sources}
   )
 target_link_libraries(LLVMExegesisTests PRIVATE ${exegesis_link_libraries})
+
+set_property(TARGET LLVMExegesisTests PROPERTY FOLDER "Tests/UnitTests/ToolTests")

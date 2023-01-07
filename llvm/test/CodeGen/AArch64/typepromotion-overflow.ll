@@ -173,13 +173,13 @@ define i32 @overflow_sub_negative_const_limit(i8 zeroext %a) {
   ret i32 %res
 }
 
-define i32 @unsafe_sub_underflow(i8 zeroext %a) {
-; CHECK-LABEL: unsafe_sub_underflow:
+; This is valid so long as the icmp immediate is sext.
+define i32 @sext_sub_underflow(i8 zeroext %a) {
+; CHECK-LABEL: sext_sub_underflow:
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    sub w9, w0, #6
 ; CHECK-NEXT:    mov w8, #16
-; CHECK-NEXT:    and w9, w9, #0xff
-; CHECK-NEXT:    cmp w9, #250
+; CHECK-NEXT:    cmn w9, #6
 ; CHECK-NEXT:    mov w9, #8
 ; CHECK-NEXT:    csel w0, w9, w8, hi
 ; CHECK-NEXT:    ret
@@ -217,13 +217,13 @@ define i32 @safe_sub_underflow_neg(i8 zeroext %a) {
   ret i32 %res
 }
 
-define i32 @unsafe_sub_underflow_neg(i8 zeroext %a) {
-; CHECK-LABEL: unsafe_sub_underflow_neg:
+; This is valid so long as the icmp immediate is sext.
+define i32 @sext_sub_underflow_neg(i8 zeroext %a) {
+; CHECK-LABEL: sext_sub_underflow_neg:
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    sub w9, w0, #4
 ; CHECK-NEXT:    mov w8, #16
-; CHECK-NEXT:    and w9, w9, #0xff
-; CHECK-NEXT:    cmp w9, #253
+; CHECK-NEXT:    cmn w9, #3
 ; CHECK-NEXT:    mov w9, #8
 ; CHECK-NEXT:    csel w0, w9, w8, lo
 ; CHECK-NEXT:    ret
@@ -233,7 +233,7 @@ define i32 @unsafe_sub_underflow_neg(i8 zeroext %a) {
   ret i32 %res
 }
 
-define i32 @safe_sub_imm_var(i8* nocapture readonly %b) local_unnamed_addr #1 {
+define i32 @safe_sub_imm_var(ptr nocapture readonly %b) local_unnamed_addr #1 {
 ; CHECK-LABEL: safe_sub_imm_var:
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    mov w0, wzr
@@ -242,7 +242,7 @@ entry:
   ret i32 0
 }
 
-define i32 @safe_sub_var_imm(i8* nocapture readonly %b) local_unnamed_addr #1 {
+define i32 @safe_sub_var_imm(ptr nocapture readonly %b) local_unnamed_addr #1 {
 ; CHECK-LABEL: safe_sub_var_imm:
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    ldrb w8, [x0]
@@ -252,14 +252,14 @@ define i32 @safe_sub_var_imm(i8* nocapture readonly %b) local_unnamed_addr #1 {
 ; CHECK-NEXT:    cset w0, hi
 ; CHECK-NEXT:    ret
 entry:
-  %0 = load i8, i8* %b, align 1
+  %0 = load i8, ptr %b, align 1
   %sub = add nsw i8 %0, 8
   %cmp = icmp ugt i8 %sub, -4
   %conv4 = zext i1 %cmp to i32
   ret i32 %conv4
 }
 
-define i32 @safe_add_imm_var(i8* nocapture readnone %b) {
+define i32 @safe_add_imm_var(ptr nocapture readnone %b) {
 ; CHECK-LABEL: safe_add_imm_var:
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    mov w0, #1
@@ -268,7 +268,7 @@ entry:
   ret i32 1
 }
 
-define i32 @safe_add_var_imm(i8* nocapture readnone %b) {
+define i32 @safe_add_var_imm(ptr nocapture readnone %b) {
 ; CHECK-LABEL: safe_add_var_imm:
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    mov w0, #1

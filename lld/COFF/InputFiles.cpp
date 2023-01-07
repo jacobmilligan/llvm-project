@@ -15,8 +15,6 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "lld/Common/DWARF.h"
-#include "lld/Common/ErrorHandler.h"
-#include "lld/Common/Memory.h"
 #include "llvm-c/lto.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
@@ -39,6 +37,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstring>
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -135,31 +134,7 @@ std::vector<MemoryBufferRef> lld::coff::getArchiveMembers(Archive *file) {
   return v;
 }
 
-void LazyObjFile::fetch() {
-  if (mb.getBuffer().empty())
-    return;
-
-  InputFile *file;
-  if (isBitcode(mb))
-    file = make<BitcodeFile>(ctx, mb, "", 0, std::move(symbols));
-  else
-    file = make<ObjFile>(ctx, mb, std::move(symbols));
-  mb = {};
-  ctx.symtab.addFile(file);
-}
-
-void LazyObjFile::parse() {
-  if (isBitcode(this->mb)) {
-    // Bitcode file.
-    std::unique_ptr<lto::InputFile> obj =
-        CHECK(lto::InputFile::create(this->mb), this);
-    for (const lto::InputFile::Symbol &sym : obj->symbols()) {
-      if (!sym.isUndefined())
-        ctx.symtab.addLazyObject(this, sym.getName());
-    }
-    return;
-  }
-
+void ObjFile::parseLazy() {
   // Native object file.
   std::unique_ptr<Binary> coffObjPtr = CHECK(createBinary(mb), this);
   COFFObjectFile *coffObj = cast<COFFObjectFile>(coffObjPtr.get());
@@ -422,15 +397,15 @@ void ObjFile::initializeSymbols() {
       symbols[i] = createUndefined(coffSym);
       uint32_t tagIndex = coffSym.getAux<coff_aux_weak_external>()->TagIndex;
       weakAliases.emplace_back(symbols[i], tagIndex);
-    } else if (Optional<Symbol *> optSym =
+    } else if (std::optional<Symbol *> optSym =
                    createDefined(coffSym, comdatDefs, prevailingComdat)) {
       symbols[i] = *optSym;
       if (config->mingw && prevailingComdat)
         recordPrevailingSymbolForMingw(coffSym, prevailingSectionMap);
     } else {
-      // createDefined() returns None if a symbol belongs to a section that
-      // was pending at the point when the symbol was read. This can happen in
-      // two cases:
+      // createDefined() returns std::nullopt if a symbol belongs to a section
+      // that was pending at the point when the symbol was read. This can happen
+      // in two cases:
       // 1) section definition symbol for a comdat leader;
       // 2) symbol belongs to a comdat section associated with another section.
       // In both of these cases, we can expect the section to be resolved by
@@ -607,7 +582,7 @@ void ObjFile::handleComdatSelection(
   }
 }
 
-Optional<Symbol *> ObjFile::createDefined(
+std::optional<Symbol *> ObjFile::createDefined(
     COFFSymbolRef sym,
     std::vector<const coff_aux_section_definition *> &comdatDefs,
     bool &prevailing) {
@@ -654,8 +629,8 @@ Optional<Symbol *> ObjFile::createDefined(
   // The second symbol entry has the name of the comdat symbol, called the
   // "comdat leader".
   // When this function is called for the first symbol entry of a comdat,
-  // it sets comdatDefs and returns None, and when it's called for the second
-  // symbol entry it reads comdatDefs and then sets it back to nullptr.
+  // it sets comdatDefs and returns std::nullopt, and when it's called for the
+  // second symbol entry it reads comdatDefs and then sets it back to nullptr.
 
   // Handle comdat leader.
   if (const coff_aux_section_definition *def = comdatDefs[sectionNumber]) {
@@ -702,7 +677,7 @@ Optional<Symbol *> ObjFile::createDefined(
       if (def->Selection != IMAGE_COMDAT_SELECT_ASSOCIATIVE)
         comdatDefs[sectionNumber] = def;
     }
-    return None;
+    return std::nullopt;
   }
 
   return createRegular(sym);
@@ -760,7 +735,8 @@ void ObjFile::initializeFlags() {
       if (sym->kind() == SymbolKind::S_OBJNAME) {
         auto objName = cantFail(SymbolDeserializer::deserializeAs<ObjNameSym>(
             sym.get()));
-        pchSignature = objName.Signature;
+        if (objName.Signature)
+          pchSignature = objName.Signature;
       }
       offset += sym->length();
     }
@@ -826,6 +802,10 @@ void ObjFile::initializeDependencies() {
   if (firstType->kind() == LF_PRECOMP) {
     PrecompRecord precomp = cantFail(
         TypeDeserializer::deserializeAs<PrecompRecord>(firstType->data()));
+    // We're better off trusting the LF_PRECOMP signature. In some cases the
+    // S_OBJNAME record doesn't contain a valid PCH signature.
+    if (precomp.Signature)
+      pchSignature = precomp.Signature;
     debugTypesObj = makeUsePrecompSource(ctx, this, precomp);
     // Drop the LF_PRECOMP record from the input stream.
     debugTypes = debugTypes.drop_front(firstType->RecordData.size());
@@ -861,8 +841,8 @@ static std::string normalizePdbPath(StringRef path) {
 }
 
 // If existing, return the actual PDB path on disk.
-static Optional<std::string> findPdbPath(StringRef pdbPath,
-                                         ObjFile *dependentFile) {
+static std::optional<std::string> findPdbPath(StringRef pdbPath,
+                                              ObjFile *dependentFile) {
   // Ensure the file exists before anything else. In some cases, if the path
   // points to a removable device, Driver::enqueuePath() would fail with an
   // error (EAGAIN, "resource unavailable try again") which we want to skip
@@ -872,7 +852,7 @@ static Optional<std::string> findPdbPath(StringRef pdbPath,
   std::string ret = getPdbBaseName(dependentFile, pdbPath);
   if (llvm::sys::fs::exists(ret))
     return normalizePdbPath(ret);
-  return None;
+  return std::nullopt;
 }
 
 PDBInputFile::PDBInputFile(COFFLinkerContext &ctx, MemoryBufferRef m)
@@ -896,11 +876,13 @@ void PDBInputFile::parse() {
   ctx.pdbInputFileInstances[mb.getBufferIdentifier().str()] = this;
 
   std::unique_ptr<pdb::IPDBSession> thisSession;
-  loadErr.emplace(pdb::NativeSession::createFromPdb(
-      MemoryBuffer::getMemBuffer(mb, false), thisSession));
-  if (*loadErr)
+  Error E = pdb::NativeSession::createFromPdb(
+      MemoryBuffer::getMemBuffer(mb, false), thisSession);
+  if (E) {
+    loadErrorStr.emplace(toString(std::move(E)));
     return; // fail silently at this point - the error will be handled later,
             // when merging the debug type stream
+  }
 
   session.reset(static_cast<pdb::NativeSession *>(thisSession.release()));
 
@@ -908,7 +890,7 @@ void PDBInputFile::parse() {
   auto expectedInfo = pdbFile.getPDBInfoStream();
   // All PDB Files should have an Info stream.
   if (!expectedInfo) {
-    loadErr.emplace(expectedInfo.takeError());
+    loadErrorStr.emplace(toString(expectedInfo.takeError()));
     return;
   }
   debugTypesObj = makeTypeServerSource(ctx, this);
@@ -917,29 +899,30 @@ void PDBInputFile::parse() {
 // Used only for DWARF debug info, which is not common (except in MinGW
 // environments). This returns an optional pair of file name and line
 // number for where the variable was defined.
-Optional<std::pair<StringRef, uint32_t>>
+std::optional<std::pair<StringRef, uint32_t>>
 ObjFile::getVariableLocation(StringRef var) {
   if (!dwarf) {
     dwarf = make<DWARFCache>(DWARFContext::create(*getCOFFObj()));
     if (!dwarf)
-      return None;
+      return std::nullopt;
   }
   if (config->machine == I386)
     var.consume_front("_");
-  Optional<std::pair<std::string, unsigned>> ret = dwarf->getVariableLoc(var);
+  std::optional<std::pair<std::string, unsigned>> ret =
+      dwarf->getVariableLoc(var);
   if (!ret)
-    return None;
-  return std::make_pair(saver.save(ret->first), ret->second);
+    return std::nullopt;
+  return std::make_pair(saver().save(ret->first), ret->second);
 }
 
 // Used only for DWARF debug info, which is not common (except in MinGW
 // environments).
-Optional<DILineInfo> ObjFile::getDILineInfo(uint32_t offset,
-                                            uint32_t sectionIndex) {
+std::optional<DILineInfo> ObjFile::getDILineInfo(uint32_t offset,
+                                                 uint32_t sectionIndex) {
   if (!dwarf) {
     dwarf = make<DWARFCache>(DWARFContext::create(*getCOFFObj()));
     if (!dwarf)
-      return None;
+      return std::nullopt;
   }
 
   return dwarf->getDILineInfo(offset, sectionIndex);
@@ -964,8 +947,8 @@ void ImportFile::parse() {
     fatal("broken import library");
 
   // Read names and create an __imp_ symbol.
-  StringRef name = saver.save(StringRef(buf + sizeof(*hdr)));
-  StringRef impName = saver.save("__imp_" + name);
+  StringRef name = saver().save(StringRef(buf + sizeof(*hdr)));
+  StringRef impName = saver().save("__imp_" + name);
   const char *nameStart = buf + sizeof(coff_import_header) + name.size() + 1;
   dllName = std::string(StringRef(nameStart));
   StringRef extName;
@@ -1006,13 +989,9 @@ void ImportFile::parse() {
 }
 
 BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
-                         StringRef archiveName, uint64_t offsetInArchive)
-    : BitcodeFile(ctx, mb, archiveName, offsetInArchive, {}) {}
-
-BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
                          StringRef archiveName, uint64_t offsetInArchive,
-                         std::vector<Symbol *> &&symbols)
-    : InputFile(ctx, BitcodeKind, mb), symbols(std::move(symbols)) {
+                         bool lazy)
+    : InputFile(ctx, BitcodeKind, mb, lazy) {
   std::string path = mb.getBufferIdentifier().str();
   if (config->thinLTOIndexOnly)
     path = replaceThinLTOSuffix(mb.getBufferIdentifier());
@@ -1023,11 +1002,12 @@ BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
   // into consideration at LTO time (which very likely causes undefined
   // symbols later in the link stage). So we append file offset to make
   // filename unique.
-  MemoryBufferRef mbref(
-      mb.getBuffer(),
-      saver.save(archiveName.empty() ? path
-                                     : archiveName + sys::path::filename(path) +
-                                           utostr(offsetInArchive)));
+  MemoryBufferRef mbref(mb.getBuffer(),
+                        saver().save(archiveName.empty()
+                                         ? path
+                                         : archiveName +
+                                               sys::path::filename(path) +
+                                               utostr(offsetInArchive)));
 
   obj = check(lto::InputFile::create(mbref));
 }
@@ -1063,6 +1043,7 @@ FakeSectionChunk ltoDataSectionChunk(&ltoDataSection.section);
 } // namespace
 
 void BitcodeFile::parse() {
+  llvm::StringSaver &saver = lld::saver();
   std::vector<std::pair<Symbol *, bool>> comdat(obj->getComdatTable().size());
   for (size_t i = 0; i != obj->getComdatTable().size(); ++i)
     // FIXME: Check nodeduplicate
@@ -1098,13 +1079,20 @@ void BitcodeFile::parse() {
         sym = ctx.symtab.addUndefined(symName, this, false);
       }
     } else {
-      sym = ctx.symtab.addRegular(this, symName, nullptr, fakeSC);
+      sym = ctx.symtab.addRegular(this, symName, nullptr, fakeSC, 0,
+                                  objSym.isWeak());
     }
     symbols.push_back(sym);
     if (objSym.isUsed())
       config->gcroot.push_back(sym);
   }
   directives = obj->getCOFFLinkerOpts();
+}
+
+void BitcodeFile::parseLazy() {
+  for (const lto::InputFile::Symbol &sym : obj->symbols())
+    if (!sym.isUndefined())
+      ctx.symtab.addLazyObject(this, sym.getName());
 }
 
 MachineTypes BitcodeFile::getMachineType() {
@@ -1178,11 +1166,11 @@ void DLLFile::parse() {
     s->nameType = ImportNameType::IMPORT_NAME;
 
     if (coffObj->getMachine() == I386) {
-      s->symbolName = symbolName = saver.save("_" + symbolName);
+      s->symbolName = symbolName = saver().save("_" + symbolName);
       s->nameType = ImportNameType::IMPORT_NAME_NOPREFIX;
     }
 
-    StringRef impName = saver.save("__imp_" + symbolName);
+    StringRef impName = saver().save("__imp_" + symbolName);
     ctx.symtab.addLazyDLLSymbol(this, s, impName);
     if (code)
       ctx.symtab.addLazyDLLSymbol(this, s, symbolName);
@@ -1201,7 +1189,7 @@ void DLLFile::makeImport(DLLFile::Symbol *s) {
 
   size_t impSize = s->dllName.size() + s->symbolName.size() + 2; // +2 for NULs
   size_t size = sizeof(coff_import_header) + impSize;
-  char *buf = bAlloc.Allocate<char>(size);
+  char *buf = bAlloc().Allocate<char>(size);
   memset(buf, 0, size);
   char *p = buf;
   auto *imp = reinterpret_cast<coff_import_header *>(p);

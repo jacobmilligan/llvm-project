@@ -46,6 +46,10 @@ void ScriptInterpreter::CollectDataForWatchpointCommandCallback(
       "This script interpreter does not support watchpoint callbacks.");
 }
 
+StructuredData::DictionarySP ScriptInterpreter::GetInterpreterInfo() {
+  return nullptr;
+}
+
 bool ScriptInterpreter::LoadScriptingModule(const char *filename,
                                             const LoadScriptOptions &options,
                                             lldb_private::Status &error,
@@ -78,7 +82,7 @@ ScriptInterpreter::GetDataExtractorFromSBData(const lldb::SBData &data) const {
 Status
 ScriptInterpreter::GetStatusFromSBError(const lldb::SBError &error) const {
   if (error.m_opaque_up)
-    return *error.m_opaque_up.get();
+    return *error.m_opaque_up;
 
   return Status();
 }
@@ -87,7 +91,7 @@ llvm::Optional<MemoryRegionInfo>
 ScriptInterpreter::GetOpaqueTypeFromSBMemoryRegionInfo(
     const lldb::SBMemoryRegionInfo &mem_region) const {
   if (!mem_region.m_opaque_up)
-    return llvm::None;
+    return std::nullopt;
   return *mem_region.m_opaque_up.get();
 }
 
@@ -105,13 +109,13 @@ ScriptInterpreter::StringToLanguage(const llvm::StringRef &language) {
 Status ScriptInterpreter::SetBreakpointCommandCallback(
     std::vector<std::reference_wrapper<BreakpointOptions>> &bp_options_vec,
     const char *callback_text) {
-  Status return_error;
+  Status error;
   for (BreakpointOptions &bp_options : bp_options_vec) {
-    return_error = SetBreakpointCommandCallback(bp_options, callback_text);
-    if (return_error.Success())
+    error = SetBreakpointCommandCallback(bp_options, callback_text);
+    if (!error.Success())
       break;
   }
-  return return_error;
+  return error;
 }
 
 Status ScriptInterpreter::SetBreakpointCommandCallbackFunction(

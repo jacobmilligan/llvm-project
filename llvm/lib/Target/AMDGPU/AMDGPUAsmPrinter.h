@@ -54,9 +54,6 @@ private:
   void getSIProgramInfo(SIProgramInfo &Out, const MachineFunction &MF);
   void getAmdKernelCode(amd_kernel_code_t &Out, const SIProgramInfo &KernelInfo,
                         const MachineFunction &MF) const;
-  void findNumUsedRegistersSI(const MachineFunction &MF,
-                              unsigned &NumSGPR,
-                              unsigned &NumVGPR) const;
 
   /// Emit register usage information so that the GPU driver
   /// can correctly setup the GPU state.
@@ -66,12 +63,13 @@ private:
                        const SIProgramInfo &KernelInfo);
   void emitPALFunctionMetadata(const MachineFunction &MF);
   void emitCommonFunctionComments(uint32_t NumVGPR,
-                                  Optional<uint32_t> NumAGPR,
-                                  uint32_t TotalNumVGPR,
-                                  uint32_t NumSGPR,
-                                  uint64_t ScratchSize,
-                                  uint64_t CodeSize,
-                                  const AMDGPUMachineFunction* MFI);
+                                  std::optional<uint32_t> NumAGPR,
+                                  uint32_t TotalNumVGPR, uint32_t NumSGPR,
+                                  uint64_t ScratchSize, uint64_t CodeSize,
+                                  const AMDGPUMachineFunction *MFI);
+  void emitResourceUsageRemarks(const MachineFunction &MF,
+                                const SIProgramInfo &CurrentProgramInfo,
+                                bool isModuleEntryFunction, bool hasMAIInsts);
 
   uint16_t getAmdhsaKernelCodeProperties(
       const MachineFunction &MF) const;
@@ -79,6 +77,8 @@ private:
   amdhsa::kernel_descriptor_t getAmdhsaKernelDescriptor(
       const MachineFunction &MF,
       const SIProgramInfo &PI) const;
+
+  void initTargetStreamer(Module &M);
 
 public:
   explicit AMDGPUAsmPrinter(TargetMachine &TM,
@@ -135,6 +135,7 @@ protected:
 
   std::vector<std::string> DisasmLines, HexLines;
   size_t DisasmLineMaxLen;
+  bool IsTargetStreamerInitialized;
 };
 
 } // end namespace llvm

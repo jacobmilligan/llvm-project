@@ -1,7 +1,26 @@
 // RUN: mlir-tblgen -gen-op-interface-decls -I %S/../../include %s | FileCheck %s --check-prefix=DECL
 // RUN: mlir-tblgen -gen-op-decls -I %S/../../include %s | FileCheck %s --check-prefix=OP_DECL
+// RUN: mlir-tblgen -gen-op-interface-docs -I %S/../../include %s | FileCheck %s --check-prefix=DOCS
 
 include "mlir/IR/OpBase.td"
+
+def ExtraShardDeclsInterface : OpInterface<"ExtraShardDeclsInterface"> {
+  let extraSharedClassDeclaration = [{
+    bool sharedMethodDeclaration() {
+      return $_op.someOtherMethod();
+    }
+  }];
+}
+
+// DECL: class ExtraShardDeclsInterface
+// DECL:      bool sharedMethodDeclaration() {
+// DECL-NEXT:   return (*this).someOtherMethod();
+// DECL-NEXT: }
+
+// DECL: struct ExtraShardDeclsInterfaceTrait
+// DECL:      bool sharedMethodDeclaration() {
+// DECL-NEXT:   return (*static_cast<ConcreteOp *>(this)).someOtherMethod();
+// DECL-NEXT: }
 
 def TestOpInterface : OpInterface<"TestOpInterface"> {
   let description = [{some op interface description}];
@@ -16,12 +35,32 @@ def TestOpInterface : OpInterface<"TestOpInterface"> {
     InterfaceMethod<
       /*desc=*/[{some function comment}],
       /*retTy=*/"int",
+      /*methodName=*/"body_foo",
+      /*args=*/(ins "int":$input),
+      /*body=*/[{ return 0; }]
+    >,
+    InterfaceMethod<
+      /*desc=*/[{some function comment}],
+      /*retTy=*/"int",
       /*methodName=*/"default_foo",
       /*args=*/(ins "int":$input),
       /*body=*/[{}],
       /*defaultBody=*/[{ return 0; }]
     >,
   ];
+}
+
+def TestOpInterfaceVerify : OpInterface<"TestOpInterfaceVerify"> {
+  let verify = [{
+    return foo();
+  }];
+}
+
+def TestOpInterfaceVerifyRegion : OpInterface<"TestOpInterfaceVerifyRegion"> {
+  let verify = [{
+    return foo();
+  }];
+  let verifyWithRegions = 1;
 }
 
 // Define Ops with TestOpInterface and
@@ -42,8 +81,16 @@ def DeclareMethodsWithDefaultOp : Op<TestDialect, "declare_methods_op",
 // DECL-LABEL: TestOpInterfaceInterfaceTraits
 // DECL: class TestOpInterface : public ::mlir::OpInterface<TestOpInterface, detail::TestOpInterfaceInterfaceTraits>
 
+// DECL: /// some function comment
 // DECL: int foo(int input);
 
+// DECL-LABEL: struct TestOpInterfaceVerifyTrait
+// DECL: verifyTrait
+
+// DECL-LABEL: struct TestOpInterfaceVerifyRegionTrait
+// DECL: verifyRegionTrait
+
+// Method implementations come last, after all class definitions.
 // DECL: template<typename ConcreteOp>
 // DECL: int detail::TestOpInterfaceInterfaceTraits::Model<ConcreteOp>::foo
 
@@ -54,3 +101,17 @@ def DeclareMethodsWithDefaultOp : Op<TestDialect, "declare_methods_op",
 // OP_DECL-LABEL: class DeclareMethodsWithDefaultOp : public
 // OP_DECL: int foo(int input);
 // OP_DECL: int default_foo(int input);
+
+// DOCS-LABEL: {{^}}## TestOpInterface (`TestOpInterface`)
+// DOCS: some op interface description
+
+// DOCS: {{^}}### Methods:
+
+// DOCS: {{^}}#### `foo`
+// DOCS: some function comment
+
+// DOCS: {{^}}#### `body_foo`
+// DOCS: some function comment
+
+// DOCS: {{^}}#### `default_foo`
+// DOCS: some function comment

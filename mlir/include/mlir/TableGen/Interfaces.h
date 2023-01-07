@@ -16,7 +16,7 @@
 namespace llvm {
 class Init;
 class Record;
-} // end namespace llvm
+} // namespace llvm
 
 namespace mlir {
 namespace tblgen {
@@ -43,13 +43,13 @@ public:
   bool isStatic() const;
 
   // Return the body for this method if it has one.
-  llvm::Optional<StringRef> getBody() const;
+  std::optional<StringRef> getBody() const;
 
   // Return the default implementation for this method if it has one.
-  llvm::Optional<StringRef> getDefaultImplementation() const;
+  std::optional<StringRef> getDefaultImplementation() const;
 
   // Return the description of this method if it has one.
-  llvm::Optional<StringRef> getDescription() const;
+  std::optional<StringRef> getDescription() const;
 
   // Arguments.
   ArrayRef<Argument> getArguments() const;
@@ -83,16 +83,24 @@ public:
   ArrayRef<InterfaceMethod> getMethods() const;
 
   // Return the description of this method if it has one.
-  llvm::Optional<StringRef> getDescription() const;
+  std::optional<StringRef> getDescription() const;
 
   // Return the interfaces extra class declaration code.
-  llvm::Optional<StringRef> getExtraClassDeclaration() const;
+  std::optional<StringRef> getExtraClassDeclaration() const;
 
   // Return the traits extra class declaration code.
-  llvm::Optional<StringRef> getExtraTraitClassDeclaration() const;
+  std::optional<StringRef> getExtraTraitClassDeclaration() const;
+
+  // Return the extra class declaration code shared between the interface and
+  // trait classes.
+  std::optional<StringRef> getExtraSharedClassDeclaration() const;
 
   // Return the verify method body if it has one.
-  llvm::Optional<StringRef> getVerify() const;
+  std::optional<StringRef> getVerify() const;
+
+  // If there's a verify method, return if it needs to access the ops in the
+  // regions.
+  bool verifyWithRegions() const;
 
   // Returns the Tablegen definition this interface was constructed from.
   const llvm::Record &getDef() const { return *def; }
@@ -123,7 +131,7 @@ struct TypeInterface : public Interface {
 
   static bool classof(const Interface *interface);
 };
-} // end namespace tblgen
-} // end namespace mlir
+} // namespace tblgen
+} // namespace mlir
 
 #endif // MLIR_TABLEGEN_INTERFACES_H_

@@ -50,17 +50,19 @@ extern "C" {
 
 DEFINE_C_API_STRUCT(MlirContext, void);
 DEFINE_C_API_STRUCT(MlirDialect, void);
+DEFINE_C_API_STRUCT(MlirDialectRegistry, void);
 DEFINE_C_API_STRUCT(MlirOperation, void);
+DEFINE_C_API_STRUCT(MlirOpOperand, void);
 DEFINE_C_API_STRUCT(MlirOpPrintingFlags, void);
 DEFINE_C_API_STRUCT(MlirBlock, void);
 DEFINE_C_API_STRUCT(MlirRegion, void);
+DEFINE_C_API_STRUCT(MlirSymbolTable, void);
 
 DEFINE_C_API_STRUCT(MlirAttribute, const void);
 DEFINE_C_API_STRUCT(MlirIdentifier, const void);
 DEFINE_C_API_STRUCT(MlirLocation, const void);
 DEFINE_C_API_STRUCT(MlirModule, const void);
 DEFINE_C_API_STRUCT(MlirType, const void);
-DEFINE_C_API_STRUCT(MlirTypeID, const void);
 DEFINE_C_API_STRUCT(MlirValue, const void);
 
 #undef DEFINE_C_API_STRUCT
@@ -81,7 +83,7 @@ typedef struct MlirNamedAttribute MlirNamedAttribute;
 //===----------------------------------------------------------------------===//
 
 /// Creates an MLIR context and transfers its ownership to the caller.
-MLIR_CAPI_EXPORTED MlirContext mlirContextCreate();
+MLIR_CAPI_EXPORTED MlirContext mlirContextCreate(void);
 
 /// Checks if two contexts are equal.
 MLIR_CAPI_EXPORTED bool mlirContextEqual(MlirContext ctx1, MlirContext ctx2);
@@ -107,6 +109,11 @@ mlirContextGetAllowUnregisteredDialects(MlirContext context);
 MLIR_CAPI_EXPORTED intptr_t
 mlirContextGetNumRegisteredDialects(MlirContext context);
 
+/// Append the contents of the given dialect registry to the registry associated
+/// with the context.
+MLIR_CAPI_EXPORTED void
+mlirContextAppendDialectRegistry(MlirContext ctx, MlirDialectRegistry registry);
+
 /// Returns the number of dialects loaded by the context.
 
 MLIR_CAPI_EXPORTED intptr_t
@@ -120,9 +127,14 @@ mlirContextGetNumLoadedDialects(MlirContext context);
 MLIR_CAPI_EXPORTED MlirDialect mlirContextGetOrLoadDialect(MlirContext context,
                                                            MlirStringRef name);
 
-/// Set threading mode (must be set to false to print-ir-after-all).
+/// Set threading mode (must be set to false to mlir-print-ir-after-all).
 MLIR_CAPI_EXPORTED void mlirContextEnableMultithreading(MlirContext context,
                                                         bool enable);
+
+/// Eagerly loads all available dialects registered with a context, making
+/// them available for use for IR construction.
+MLIR_CAPI_EXPORTED void
+mlirContextLoadAllAvailableDialects(MlirContext context);
 
 /// Returns whether the given fully-qualified operation (i.e.
 /// 'dialect.operation') is registered with the context. This will return true
@@ -150,6 +162,64 @@ MLIR_CAPI_EXPORTED bool mlirDialectEqual(MlirDialect dialect1,
 
 /// Returns the namespace of the given dialect.
 MLIR_CAPI_EXPORTED MlirStringRef mlirDialectGetNamespace(MlirDialect dialect);
+
+//===----------------------------------------------------------------------===//
+// DialectHandle API.
+// Registration entry-points for each dialect are declared using the common
+// MLIR_DECLARE_DIALECT_REGISTRATION_CAPI macro, which takes the dialect
+// API name (i.e. "Func", "Tensor", "Linalg") and namespace (i.e. "func",
+// "tensor", "linalg"). The following declarations are produced:
+//
+//   /// Gets the above hook methods in struct form for a dialect by namespace.
+//   /// This is intended to facilitate dynamic lookup and registration of
+//   /// dialects via a plugin facility based on shared library symbol lookup.
+//   const MlirDialectHandle *mlirGetDialectHandle__{NAMESPACE}__();
+//
+// This is done via a common macro to facilitate future expansion to
+// registration schemes.
+//===----------------------------------------------------------------------===//
+
+struct MlirDialectHandle {
+  const void *ptr;
+};
+typedef struct MlirDialectHandle MlirDialectHandle;
+
+#define MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Name, Namespace)                \
+  MLIR_CAPI_EXPORTED MlirDialectHandle mlirGetDialectHandle__##Namespace##__(  \
+      void)
+
+/// Returns the namespace associated with the provided dialect handle.
+MLIR_CAPI_EXPORTED
+MlirStringRef mlirDialectHandleGetNamespace(MlirDialectHandle);
+
+/// Inserts the dialect associated with the provided dialect handle into the
+/// provided dialect registry
+MLIR_CAPI_EXPORTED void mlirDialectHandleInsertDialect(MlirDialectHandle,
+                                                       MlirDialectRegistry);
+
+/// Registers the dialect associated with the provided dialect handle.
+MLIR_CAPI_EXPORTED void mlirDialectHandleRegisterDialect(MlirDialectHandle,
+                                                         MlirContext);
+
+/// Loads the dialect associated with the provided dialect handle.
+MLIR_CAPI_EXPORTED MlirDialect mlirDialectHandleLoadDialect(MlirDialectHandle,
+                                                            MlirContext);
+
+//===----------------------------------------------------------------------===//
+// DialectRegistry API.
+//===----------------------------------------------------------------------===//
+
+/// Creates a dialect registry and transfers its ownership to the caller.
+MLIR_CAPI_EXPORTED MlirDialectRegistry mlirDialectRegistryCreate(void);
+
+/// Checks if the dialect registry is null.
+static inline bool mlirDialectRegistryIsNull(MlirDialectRegistry registry) {
+  return !registry.ptr;
+}
+
+/// Takes a dialect registry owned by the caller and destroys it.
+MLIR_CAPI_EXPORTED void
+mlirDialectRegistryDestroy(MlirDialectRegistry registry);
 
 //===----------------------------------------------------------------------===//
 // Location API.
@@ -295,7 +365,7 @@ mlirOperationStateEnableResultTypeInference(MlirOperationState *state);
 
 /// Creates new printing flags with defaults, intended for customization.
 /// Must be freed with a call to mlirOpPrintingFlagsDestroy().
-MLIR_CAPI_EXPORTED MlirOpPrintingFlags mlirOpPrintingFlagsCreate();
+MLIR_CAPI_EXPORTED MlirOpPrintingFlags mlirOpPrintingFlagsCreate(void);
 
 /// Destroys printing flags created with mlirOpPrintingFlagsCreate.
 MLIR_CAPI_EXPORTED void mlirOpPrintingFlagsDestroy(MlirOpPrintingFlags flags);
@@ -308,11 +378,12 @@ MLIR_CAPI_EXPORTED void
 mlirOpPrintingFlagsElideLargeElementsAttrs(MlirOpPrintingFlags flags,
                                            intptr_t largeElementLimit);
 
-/// Enable printing of debug information. If 'prettyForm' is set to true,
-/// debug information is printed in a more readable 'pretty' form. Note: The
-/// IR generated with 'prettyForm' is not parsable.
+/// Enable or disable printing of debug information (based on `enable`). If
+/// 'prettyForm' is set to true, debug information is printed in a more readable
+/// 'pretty' form. Note: The IR generated with 'prettyForm' is not parsable.
 MLIR_CAPI_EXPORTED void
-mlirOpPrintingFlagsEnableDebugInfo(MlirOpPrintingFlags flags, bool prettyForm);
+mlirOpPrintingFlagsEnableDebugInfo(MlirOpPrintingFlags flags, bool enable,
+                                   bool prettyForm);
 
 /// Always print operations in the generic form.
 MLIR_CAPI_EXPORTED void
@@ -345,6 +416,10 @@ MLIR_CAPI_EXPORTED MlirOperation mlirOperationClone(MlirOperation op);
 
 /// Takes an operation owned by the caller and destroys it.
 MLIR_CAPI_EXPORTED void mlirOperationDestroy(MlirOperation op);
+
+/// Removes the given operation from its parent block. The operation is not
+/// destroyed. The ownership of the operation is transferred to the caller.
+MLIR_CAPI_EXPORTED void mlirOperationRemoveFromParent(MlirOperation op);
 
 /// Checks whether the underlying operation is null.
 static inline bool mlirOperationIsNull(MlirOperation op) { return !op.ptr; }
@@ -449,18 +524,36 @@ MLIR_CAPI_EXPORTED void mlirOperationPrintWithFlags(MlirOperation op,
                                                     MlirStringCallback callback,
                                                     void *userData);
 
+/// Same as mlirOperationPrint but writing the bytecode format out.
+MLIR_CAPI_EXPORTED void mlirOperationWriteBytecode(MlirOperation op,
+                                                   MlirStringCallback callback,
+                                                   void *userData);
+
 /// Prints an operation to stderr.
 MLIR_CAPI_EXPORTED void mlirOperationDump(MlirOperation op);
 
 /// Verify the operation and return true if it passes, false if it fails.
 MLIR_CAPI_EXPORTED bool mlirOperationVerify(MlirOperation op);
 
+/// Moves the given operation immediately after the other operation in its
+/// parent block. The given operation may be owned by the caller or by its
+/// current block. The other operation must belong to a block. In any case, the
+/// ownership is transferred to the block of the other operation.
+MLIR_CAPI_EXPORTED void mlirOperationMoveAfter(MlirOperation op,
+                                               MlirOperation other);
+
+/// Moves the given operation immediately before the other operation in its
+/// parent block. The given operation may be owner by the caller or by its
+/// current block. The other operation must belong to a block. In any case, the
+/// ownership is transferred to the block of the other operation.
+MLIR_CAPI_EXPORTED void mlirOperationMoveBefore(MlirOperation op,
+                                                MlirOperation other);
 //===----------------------------------------------------------------------===//
 // Region API.
 //===----------------------------------------------------------------------===//
 
 /// Creates a new empty region and transfers ownership to the caller.
-MLIR_CAPI_EXPORTED MlirRegion mlirRegionCreate();
+MLIR_CAPI_EXPORTED MlirRegion mlirRegionCreate(void);
 
 /// Takes a region owned by the caller and destroys it.
 MLIR_CAPI_EXPORTED void mlirRegionDestroy(MlirRegion region);
@@ -499,6 +592,13 @@ MLIR_CAPI_EXPORTED void mlirRegionInsertOwnedBlockBefore(MlirRegion region,
                                                          MlirBlock reference,
                                                          MlirBlock block);
 
+/// Returns first region attached to the operation.
+MLIR_CAPI_EXPORTED MlirRegion mlirOperationGetFirstRegion(MlirOperation op);
+
+/// Returns the region immediately following the given region in its parent
+/// operation.
+MLIR_CAPI_EXPORTED MlirRegion mlirRegionGetNextInOperation(MlirRegion region);
+
 //===----------------------------------------------------------------------===//
 // Block API.
 //===----------------------------------------------------------------------===//
@@ -506,10 +606,14 @@ MLIR_CAPI_EXPORTED void mlirRegionInsertOwnedBlockBefore(MlirRegion region,
 /// Creates a new empty block with the given argument types and transfers
 /// ownership to the caller.
 MLIR_CAPI_EXPORTED MlirBlock mlirBlockCreate(intptr_t nArgs,
-                                             MlirType const *args);
+                                             MlirType const *args,
+                                             MlirLocation const *locs);
 
 /// Takes a block owned by the caller and destroys it.
 MLIR_CAPI_EXPORTED void mlirBlockDestroy(MlirBlock block);
+
+/// Detach a block from the owning region and assume ownership.
+MLIR_CAPI_EXPORTED void mlirBlockDetach(MlirBlock block);
 
 /// Checks whether a block is null.
 static inline bool mlirBlockIsNull(MlirBlock block) { return !block.ptr; }
@@ -565,7 +669,8 @@ MLIR_CAPI_EXPORTED intptr_t mlirBlockGetNumArguments(MlirBlock block);
 /// Appends an argument of the specified type to the block. Returns the newly
 /// added argument.
 MLIR_CAPI_EXPORTED MlirValue mlirBlockAddArgument(MlirBlock block,
-                                                  MlirType type);
+                                                  MlirType type,
+                                                  MlirLocation loc);
 
 /// Returns `pos`-th argument of the block.
 MLIR_CAPI_EXPORTED MlirValue mlirBlockGetArgument(MlirBlock block,
@@ -623,6 +728,29 @@ MLIR_CAPI_EXPORTED void mlirValueDump(MlirValue value);
 /// several times with consecutive chunks of the string.
 MLIR_CAPI_EXPORTED void
 mlirValuePrint(MlirValue value, MlirStringCallback callback, void *userData);
+
+/// Returns an op operand representing the first use of the value, or a null op
+/// operand if there are no uses.
+MLIR_CAPI_EXPORTED MlirOpOperand mlirValueGetFirstUse(MlirValue value);
+
+//===----------------------------------------------------------------------===//
+// OpOperand API.
+//===----------------------------------------------------------------------===//
+
+/// Returns whether the op operand is null.
+MLIR_CAPI_EXPORTED bool mlirOpOperandIsNull(MlirOpOperand opOperand);
+
+/// Returns the owner operation of an op operand.
+MLIR_CAPI_EXPORTED MlirOperation mlirOpOperandGetOwner(MlirOpOperand opOperand);
+
+/// Returns the operand number of an op operand.
+MLIR_CAPI_EXPORTED unsigned
+mlirOpOperandGetOperandNumber(MlirOpOperand opOperand);
+
+/// Returns an op operand representing the next use of the value, or a null op
+/// operand if there is no next use.
+MLIR_CAPI_EXPORTED MlirOpOperand
+mlirOpOperandGetNextUse(MlirOpOperand opOperand);
 
 //===----------------------------------------------------------------------===//
 // Type API.
@@ -709,19 +837,66 @@ MLIR_CAPI_EXPORTED bool mlirIdentifierEqual(MlirIdentifier ident,
 MLIR_CAPI_EXPORTED MlirStringRef mlirIdentifierStr(MlirIdentifier ident);
 
 //===----------------------------------------------------------------------===//
-// TypeID API.
+// Symbol and SymbolTable API.
 //===----------------------------------------------------------------------===//
 
-/// Checks whether a type id is null.
-MLIR_CAPI_EXPORTED static inline bool mlirTypeIDIsNull(MlirTypeID typeID) {
-  return !typeID.ptr;
+/// Returns the name of the attribute used to store symbol names compatible with
+/// symbol tables.
+MLIR_CAPI_EXPORTED MlirStringRef mlirSymbolTableGetSymbolAttributeName(void);
+
+/// Returns the name of the attribute used to store symbol visibility.
+MLIR_CAPI_EXPORTED MlirStringRef
+mlirSymbolTableGetVisibilityAttributeName(void);
+
+/// Creates a symbol table for the given operation. If the operation does not
+/// have the SymbolTable trait, returns a null symbol table.
+MLIR_CAPI_EXPORTED MlirSymbolTable
+mlirSymbolTableCreate(MlirOperation operation);
+
+/// Returns true if the symbol table is null.
+static inline bool mlirSymbolTableIsNull(MlirSymbolTable symbolTable) {
+  return !symbolTable.ptr;
 }
 
-/// Checks if two type ids are equal.
-MLIR_CAPI_EXPORTED bool mlirTypeIDEqual(MlirTypeID typeID1, MlirTypeID typeID2);
+/// Destroys the symbol table created with mlirSymbolTableCreate. This does not
+/// affect the operations in the table.
+MLIR_CAPI_EXPORTED void mlirSymbolTableDestroy(MlirSymbolTable symbolTable);
 
-/// Returns the hash value of the type id.
-MLIR_CAPI_EXPORTED size_t mlirTypeIDHashValue(MlirTypeID typeID);
+/// Looks up a symbol with the given name in the given symbol table and returns
+/// the operation that corresponds to the symbol. If the symbol cannot be found,
+/// returns a null operation.
+MLIR_CAPI_EXPORTED MlirOperation
+mlirSymbolTableLookup(MlirSymbolTable symbolTable, MlirStringRef name);
+
+/// Inserts the given operation into the given symbol table. The operation must
+/// have the symbol trait. If the symbol table already has a symbol with the
+/// same name, renames the symbol being inserted to ensure name uniqueness. Note
+/// that this does not move the operation itself into the block of the symbol
+/// table operation, this should be done separately. Returns the name of the
+/// symbol after insertion.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirSymbolTableInsert(MlirSymbolTable symbolTable, MlirOperation operation);
+
+/// Removes the given operation from the symbol table and erases it.
+MLIR_CAPI_EXPORTED void mlirSymbolTableErase(MlirSymbolTable symbolTable,
+                                             MlirOperation operation);
+
+/// Attempt to replace all uses that are nested within the given operation
+/// of the given symbol 'oldSymbol' with the provided 'newSymbol'. This does
+/// not traverse into nested symbol tables. Will fail atomically if there are
+/// any unknown operations that may be potential symbol tables.
+MLIR_CAPI_EXPORTED MlirLogicalResult mlirSymbolTableReplaceAllSymbolUses(
+    MlirStringRef oldSymbol, MlirStringRef newSymbol, MlirOperation from);
+
+/// Walks all symbol table operations nested within, and including, `op`. For
+/// each symbol table operation, the provided callback is invoked with the op
+/// and a boolean signifying if the symbols within that symbol table can be
+/// treated as if all uses within the IR are visible to the caller.
+/// `allSymUsesVisible` identifies whether all of the symbol uses of symbols
+/// within `op` are visible.
+MLIR_CAPI_EXPORTED void mlirSymbolTableWalkSymbolTables(
+    MlirOperation from, bool allSymUsesVisible,
+    void (*callback)(MlirOperation, bool, void *userData), void *userData);
 
 #ifdef __cplusplus
 }

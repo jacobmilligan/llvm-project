@@ -32,28 +32,13 @@ llvm::VersionTuple HostInfoFreeBSD::GetOSVersion() {
 
 llvm::Optional<std::string> HostInfoFreeBSD::GetOSBuildString() {
   int mib[2] = {CTL_KERN, KERN_OSREV};
-  char osrev_str[12];
   uint32_t osrev = 0;
   size_t osrev_len = sizeof(osrev);
 
   if (::sysctl(mib, 2, &osrev, &osrev_len, NULL, 0) == 0)
     return llvm::formatv("{0,8:8}", osrev).str();
 
-  return llvm::None;
-}
-
-bool HostInfoFreeBSD::GetOSKernelDescription(std::string &s) {
-  struct utsname un;
-
-  ::memset(&un, 0, sizeof(utsname));
-  s.clear();
-
-  if (uname(&un) < 0)
-    return false;
-
-  s.assign(un.version);
-
-  return true;
+  return std::nullopt;
 }
 
 FileSpec HostInfoFreeBSD::GetProgramFileSpec() {

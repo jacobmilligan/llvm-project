@@ -69,6 +69,41 @@ std::string Operator::getAdaptorName() const {
   return std::string(llvm::formatv("{0}Adaptor", getCppClassName()));
 }
 
+/// Assert the invariants of accessors generated for the given name.
+static void assertAccessorInvariants(const Operator &op, StringRef name) {
+  std::string accessorName =
+      convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true);
+
+  // Functor used to detect when an accessor will cause an overlap with an
+  // operation API.
+  //
+  // There are a little bit more invasive checks possible for cases where not
+  // all ops have the trait that would cause overlap. For many cases here,
+  // renaming would be better (e.g., we can only guard in limited manner
+  // against methods from traits and interfaces here, so avoiding these in op
+  // definition is safer).
+  auto nameOverlapsWithOpAPI = [&](StringRef newName) {
+    if (newName == "AttributeNames" || newName == "Attributes" ||
+        newName == "Operation")
+      return true;
+    if (newName == "Operands")
+      return op.getNumOperands() != 1 || op.getNumVariableLengthOperands() != 1;
+    if (newName == "Regions")
+      return op.getNumRegions() != 1 || op.getNumVariadicRegions() != 1;
+    if (newName == "Type")
+      return op.getNumResults() != 1;
+    return false;
+  };
+  if (nameOverlapsWithOpAPI(accessorName)) {
+    // This error could be avoided in situations where the final function is
+    // identical, but preferably the op definition should avoid using generic
+    // names.
+    PrintFatalError(op.getLoc(), "generated accessor for `" + name +
+                                     "` overlaps with a default one; please "
+                                     "rename to avoid overlap");
+  }
+}
+
 void Operator::assertInvariants() const {
   // Check that the name of arguments/results/regions/successors don't overlap.
   DenseMap<StringRef, StringRef> existingNames;
@@ -76,8 +111,11 @@ void Operator::assertInvariants() const {
     if (name.empty())
       return;
     auto insertion = existingNames.insert({name, entity});
-    if (insertion.second)
+    if (insertion.second) {
+      // Assert invariants for accessors generated for this name.
+      assertAccessorInvariants(*this, name);
       return;
+    }
     if (entity == insertion.first->second)
       PrintFatalError(getLoc(), "op has a conflict with two " + entity +
                                     " having the same name '" + name + "'");
@@ -128,17 +166,28 @@ StringRef Operator::getExtraClassDeclaration() const {
   return def.getValueAsString(attr);
 }
 
+StringRef Operator::getExtraClassDefinition() const {
+  constexpr auto attr = "extraClassDefinition";
+  if (def.isValueUnset(attr))
+    return {};
+  return def.getValueAsString(attr);
+}
+
 const llvm::Record &Operator::getDef() const { return def; }
 
 bool Operator::skipDefaultBuilders() const {
   return def.getValueAsBit("skipDefaultBuilders");
 }
 
-auto Operator::result_begin() -> value_iterator { return results.begin(); }
+auto Operator::result_begin() const -> const_value_iterator {
+  return results.begin();
+}
 
-auto Operator::result_end() -> value_iterator { return results.end(); }
+auto Operator::result_end() const -> const_value_iterator {
+  return results.end();
+}
 
-auto Operator::getResults() -> value_range {
+auto Operator::getResults() const -> const_value_range {
   return {result_begin(), result_end()};
 }
 
@@ -279,9 +328,13 @@ auto Operator::getAttributes() const
   return {attribute_begin(), attribute_end()};
 }
 
-auto Operator::operand_begin() -> value_iterator { return operands.begin(); }
-auto Operator::operand_end() -> value_iterator { return operands.end(); }
-auto Operator::getOperands() -> value_range {
+auto Operator::operand_begin() const -> const_value_iterator {
+  return operands.begin();
+}
+auto Operator::operand_end() const -> const_value_iterator {
+  return operands.end();
+}
+auto Operator::getOperands() const -> const_value_range {
   return {operand_begin(), operand_end()};
 }
 
@@ -312,15 +365,31 @@ void Operator::populateTypeInferenceInfo(
   if (getNumResults() == 0)
     return;
 
-  // Skip for ops with variadic operands/results.
-  // TODO: This can be relaxed.
-  if (isVariadic())
+  // Skip ops with variadic or optional results.
+  if (getNumVariableLengthResults() > 0)
     return;
 
   // Skip cases currently being custom generated.
   // TODO: Remove special cases.
-  if (getTrait("::mlir::OpTrait::SameOperandsAndResultType"))
+  if (getTrait("::mlir::OpTrait::SameOperandsAndResultType")) {
+    // Check for a non-variable length operand to use as the type anchor.
+    auto *operandI = llvm::find_if(arguments, [](const Argument &arg) {
+      NamedTypeConstraint *operand = arg.dyn_cast<NamedTypeConstraint *>();
+      return operand && !operand->isVariableLength();
+    });
+    if (operandI == arguments.end())
+      return;
+
+    // Map each of the result types to the anchor operation.
+    int operandIdx = operandI - arguments.begin();
+    resultTypeMapping.resize(getNumResults());
+    for (int i = 0; i < getNumResults(); ++i)
+      resultTypeMapping[i].emplace_back(operandIdx);
+
+    allResultsHaveKnownTypes = true;
+    traits.push_back(Trait::create(inferTrait->getDefInit()));
     return;
+  }
 
   // We create equivalence classes of argument/result types where arguments
   // and results are mapped into the same index space and indices corresponding
@@ -336,20 +405,15 @@ void Operator::populateTypeInferenceInfo(
     for (auto me = ecs.member_end(); mi != me; ++mi) {
       if (*mi < 0) {
         auto tc = getResultTypeConstraint(i);
-        if (tc.getBuilderCall().hasValue()) {
+        if (tc.getBuilderCall()) {
           resultTypeMapping[i].emplace_back(tc);
           found = true;
         }
         continue;
       }
 
-      if (getArg(*mi).is<NamedAttribute *>()) {
-        // TODO: Handle attributes.
-        continue;
-      } else {
-        resultTypeMapping[i].emplace_back(*mi);
-        found = true;
-      }
+      resultTypeMapping[i].emplace_back(*mi);
+      found = true;
     }
     return found;
   };
@@ -534,14 +598,36 @@ void Operator::populateOpStructure() {
     SmallPtrSet<const llvm::Init *, 32> traitSet;
     traits.reserve(traitSet.size());
 
+    // The declaration order of traits imply the verification order of traits.
+    // Some traits may require other traits to be verified first then they can
+    // do further verification based on those verified facts. If you see this
+    // error, fix the traits declaration order by checking the `dependentTraits`
+    // field.
+    auto verifyTraitValidity = [&](Record *trait) {
+      auto *dependentTraits = trait->getValueAsListInit("dependentTraits");
+      for (auto *traitInit : *dependentTraits)
+        if (traitSet.find(traitInit) == traitSet.end())
+          PrintFatalError(
+              def.getLoc(),
+              trait->getValueAsString("trait") + " requires " +
+                  cast<DefInit>(traitInit)->getDef()->getValueAsString(
+                      "trait") +
+                  " to precede it in traits list");
+    };
+
     std::function<void(llvm::ListInit *)> insert;
     insert = [&](llvm::ListInit *traitList) {
       for (auto *traitInit : *traitList) {
         auto *def = cast<DefInit>(traitInit)->getDef();
-        if (def->isSubClassOf("OpTraitList")) {
+        if (def->isSubClassOf("TraitList")) {
           insert(def->getValueAsListInit("traits"));
           continue;
         }
+
+        // Verify if the trait has all the dependent traits declared before
+        // itself.
+        verifyTraitValidity(def);
+
         // Keep traits in the same order while skipping over duplicates.
         if (traitSet.insert(traitInit).second)
           traits.push_back(Trait::create(traitInit));
@@ -598,7 +684,7 @@ auto Operator::getSameTypeAsResult(int index) const -> ArrayRef<ArgOrType> {
   return resultTypeMapping[index];
 }
 
-ArrayRef<llvm::SMLoc> Operator::getLoc() const { return def.getLoc(); }
+ArrayRef<SMLoc> Operator::getLoc() const { return def.getLoc(); }
 
 bool Operator::hasDescription() const {
   return def.getValue("description") != nullptr;
@@ -644,56 +730,14 @@ auto Operator::getArgToOperandOrAttribute(int index) const
   return attrOrOperandMapping[index];
 }
 
-// Helper to return the names for accessor.
-static SmallVector<std::string, 2>
-getGetterOrSetterNames(bool isGetter, const Operator &op, StringRef name) {
-  Dialect::EmitPrefix prefixType = op.getDialect().getEmitAccessorPrefix();
-  std::string prefix;
-  if (prefixType != Dialect::EmitPrefix::Raw)
-    prefix = isGetter ? "get" : "set";
-
-  SmallVector<std::string, 2> names;
-  bool rawToo = prefixType == Dialect::EmitPrefix::Both;
-
-  auto skip = [&](StringRef newName) {
-    bool shouldSkip = newName == "getOperands";
-    if (!shouldSkip)
-      return false;
-
-    // This note could be avoided where the final function generated would
-    // have been identical. But preferably in the op definition avoiding using
-    // the generic name and then getting a more specialize type is better.
-    PrintNote(op.getLoc(),
-              "Skipping generation of prefixed accessor `" + newName +
-                  "` as it overlaps with default one; generating raw form (`" +
-                  name + "`) still");
-    return true;
-  };
-
-  if (!prefix.empty()) {
-    names.push_back(
-        prefix + convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true));
-    // Skip cases which would overlap with default ones for now.
-    if (skip(names.back())) {
-      rawToo = true;
-      names.clear();
-    } else {
-      LLVM_DEBUG(llvm::errs() << "WITH_GETTER(\"" << op.getQualCppClassName()
-                              << "::" << names.back() << "\");\n"
-                              << "WITH_GETTER(\"" << op.getQualCppClassName()
-                              << "Adaptor::" << names.back() << "\");\n";);
-    }
-  }
-
-  if (prefix.empty() || rawToo)
-    names.push_back(name.str());
-  return names;
+std::string Operator::getGetterName(StringRef name) const {
+  return "get" + convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true);
 }
 
-SmallVector<std::string, 2> Operator::getGetterNames(StringRef name) const {
-  return getGetterOrSetterNames(/*isGetter=*/true, *this, name);
+std::string Operator::getSetterName(StringRef name) const {
+  return "set" + convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true);
 }
 
-SmallVector<std::string, 2> Operator::getSetterNames(StringRef name) const {
-  return getGetterOrSetterNames(/*isGetter=*/false, *this, name);
+std::string Operator::getRemoverName(StringRef name) const {
+  return "remove" + convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true);
 }

@@ -12,24 +12,35 @@ set(LLVM_LINK_COMPONENTS
 
 if(MLIR_INCLUDE_TESTS)
   set(test_libs
-    MLIRTestStandardToLLVM
+    MLIRTestFuncToLLVM
     MLIRAffineTransformsTestPasses
+    MLIRArithTestPasses
+    MLIRBufferizationTestPasses
+    MLIRControlFlowTestPasses
     MLIRDLTITestPasses
+    MLIRFuncTestPasses
     MLIRGPUTestPasses
     MLIRLinalgTestPasses
     MLIRMathTestPasses
+    MLIRMemRefTestPasses
+    MLIRNVGPUTestPasses
     MLIRSCFTestPasses
     MLIRShapeTestPasses
     MLIRSPIRVTestPasses
-    MLIRStandardOpsTestPasses
-    MLIRVectorTestPasses
+    MLIRTensorTestPasses
     MLIRTestAnalysis
     MLIRTestDialect
+    MLIRTestDynDialect
     MLIRTestIR
     MLIRTestPass
+    MLIRTestPDLL
     MLIRTestReducer
     MLIRTestRewrite
+    MLIRTestTransformDialect
     MLIRTestTransforms
+    MLIRTilingInterfaceTestPasses
+    MLIRVectorTestPasses
+    MLIRLLVMTestPasses
     )
 endif()
 
@@ -37,7 +48,7 @@ set(LIBS
   ${dialect_libs}
   ${conversion_libs}
   ${test_libs}
-  MLIRLoopAnalysis
+  MLIRAffineAnalysis
   MLIRAnalysis
   MLIRDialect
   MLIROptLib
@@ -60,7 +71,7 @@ add_mlir_library(MLIRMlirOptMain
   ${LIBS}
   )
 
-add_llvm_tool(mlir-opt
+add_mlir_tool(mlir-opt
   mlir-opt.cpp
 
   DEPENDS

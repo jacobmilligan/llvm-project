@@ -22,7 +22,6 @@
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -140,7 +139,7 @@ public:
     return Result;
   }
 
-  llvm::Optional<clang::TraversalKind> TraversalKind() const override {
+  std::optional<clang::TraversalKind> TraversalKind() const override {
     return InnerMatcher->TraversalKind();
   }
 
@@ -176,7 +175,7 @@ public:
     return this->InnerMatcher->dynMatches(DynNode, Finder, Builder);
   }
 
-  llvm::Optional<clang::TraversalKind> TraversalKind() const override {
+  std::optional<clang::TraversalKind> TraversalKind() const override {
     return TK;
   }
 
@@ -340,7 +339,8 @@ bool DynTypedMatcher::matchesNoKindCheck(const DynTypedNode &DynNode,
 }
 
 llvm::Optional<DynTypedMatcher> DynTypedMatcher::tryBind(StringRef ID) const {
-  if (!AllowBind) return llvm::None;
+  if (!AllowBind)
+    return std::nullopt;
   auto Result = *this;
   Result.Implementation =
       new IdDynMatcher(ID, std::move(Result.Implementation));
@@ -703,7 +703,7 @@ getExpansionLocOfMacro(StringRef MacroName, SourceLocation Loc,
     if (isTokenAtLoc(SM, LangOpts, MacroName, Loc))
       return Loc;
   }
-  return llvm::None;
+  return std::nullopt;
 }
 
 std::shared_ptr<llvm::Regex> createAndVerifyRegex(StringRef Regex,
@@ -768,6 +768,7 @@ const internal::VariadicDynCastAllOfMatcher<Decl, TemplateTypeParmDecl>
 const internal::VariadicDynCastAllOfMatcher<Decl, TemplateTemplateParmDecl>
     templateTemplateParmDecl;
 
+const internal::VariadicAllOfMatcher<LambdaCapture> lambdaCapture;
 const internal::VariadicAllOfMatcher<QualType> qualType;
 const internal::VariadicAllOfMatcher<Type> type;
 const internal::VariadicAllOfMatcher<TypeLoc> typeLoc;
@@ -916,6 +917,7 @@ const internal::VariadicDynCastAllOfMatcher<Stmt, AsmStmt> asmStmt;
 const internal::VariadicDynCastAllOfMatcher<Stmt, CXXBoolLiteralExpr>
     cxxBoolLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, StringLiteral> stringLiteral;
+const internal::VariadicDynCastAllOfMatcher<Stmt, ObjCStringLiteral> objcStringLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, CharacterLiteral>
     characterLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, IntegerLiteral>
@@ -1058,6 +1060,7 @@ const AstTypeMatcher<UnaryTransformType> unaryTransformType;
 const AstTypeMatcher<RecordType> recordType;
 const AstTypeMatcher<TagType> tagType;
 const AstTypeMatcher<ElaboratedType> elaboratedType;
+const AstTypeMatcher<UsingType> usingType;
 const AstTypeMatcher<SubstTemplateTypeParmType> substTemplateTypeParmType;
 const AstTypeMatcher<TemplateTypeParmType> templateTypeParmType;
 const AstTypeMatcher<InjectedClassNameType> injectedClassNameType;

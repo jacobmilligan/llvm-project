@@ -4,6 +4,7 @@ set(LLVM_LINK_COMPONENTS
   Option
   FrontendOpenMP
   Support
+  TargetParser
   )
 
 
@@ -16,7 +17,9 @@ add_clang_unittest(ToolingTests
   DiagnosticsYamlTest.cpp
   ExecutionTest.cpp
   FixItTest.cpp
+  HeaderAnalysisTest.cpp
   HeaderIncludesTest.cpp
+  StandardLibraryTest.cpp
   LexicallyOrderedRecursiveASTVisitorTest.cpp
   LookupTest.cpp
   QualTypeNamesTest.cpp
@@ -80,6 +83,7 @@ clang_target_link_libraries(ToolingTests
   clangTooling
   clangToolingCore
   clangToolingInclusions
+  clangToolingInclusionsStdlib
   clangToolingRefactoring
   clangTransformer
   )
@@ -87,6 +91,7 @@ clang_target_link_libraries(ToolingTests
 target_link_libraries(ToolingTests
   PRIVATE
   LLVMTestingSupport
+  clangTesting
 )
 
 add_subdirectory(Syntax)

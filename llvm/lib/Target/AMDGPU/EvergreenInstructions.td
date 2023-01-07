@@ -126,7 +126,6 @@ def EXP_IEEE_eg : EXP_IEEE_Common<0x81>;
 def LOG_IEEE_eg : LOG_IEEE_Common<0x83>;
 def RECIP_CLAMPED_eg : RECIP_CLAMPED_Common<0x84>;
 def RECIPSQRT_IEEE_eg : RECIPSQRT_IEEE_Common<0x89>;
-def : RsqPat<RECIPSQRT_IEEE_eg, f32>;
 def : SqrtPat<RECIPSQRT_IEEE_eg, RECIP_IEEE_eg>;
 
 def SIN_eg : SIN_Common<0x8D>;
@@ -311,14 +310,6 @@ multiclass AtomicPat<Instruction inst_noret,
             (EXTRACT_SUBREG (inst_noret
               (INSERT_SUBREG (v4i32 (IMPLICIT_DEF)), $data, sub0), $ptr), sub1)>;
 }
-multiclass AtomicIncDecPat<Instruction inst_noret,
-                           SDPatternOperator node_noret, int C> {
-  // FIXME: Add _RTN version. We need per WI scratch location to store the old value
-  // EXTRACT_SUBREG here is dummy, we know the node has no uses
-  def : EGOrCaymanPat<(i32 (node_noret i32:$ptr, C)),
-            (EXTRACT_SUBREG (inst_noret
-              (INSERT_SUBREG (v4i32 (IMPLICIT_DEF)), (MOV_IMM_I32 -1), sub0), $ptr), sub1)>;
-}
 
 // CMPSWAP is pattern is special
 // EXTRACT_SUBREG here is dummy, we know the node has no uses
@@ -350,14 +341,6 @@ defm AtomicOrPat : AtomicPat <RAT_ATOMIC_OR_NORET,
                               atomic_load_or_global_noret_32>;
 defm AtomicXorPat : AtomicPat <RAT_ATOMIC_XOR_NORET,
                                atomic_load_xor_global_noret_32>;
-defm AtomicIncAddPat : AtomicIncDecPat <RAT_ATOMIC_INC_UINT_NORET,
-                                        atomic_load_add_global_noret_32, 1>;
-defm AtomicIncSubPat : AtomicIncDecPat <RAT_ATOMIC_INC_UINT_NORET,
-                                        atomic_load_sub_global_noret_32, -1>;
-defm AtomicDecAddPat : AtomicIncDecPat <RAT_ATOMIC_DEC_UINT_NORET,
-                                        atomic_load_add_global_noret_32, -1>;
-defm AtomicDecSubPat : AtomicIncDecPat <RAT_ATOMIC_DEC_UINT_NORET,
-                                        atomic_load_sub_global_noret_32, 1>;
 
 // Should be predicated on FeatureFP64
 // def FMA_64 : R600_3OP <

@@ -12,18 +12,18 @@
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/Optional.h"
+#include "llvm/CodeGen/CodeGenCommonISel.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
+#include "llvm/CodeGen/GlobalISel/LostDebugLocObserver.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
-#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
-#include "llvm/CodeGen/MachineSizeOpts.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineSizeOpts.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 #include "llvm/CodeGen/StackProtector.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -31,6 +31,9 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Utils/SizeOpts.h"
+#include <numeric>
+#include <optional>
 
 #define DEBUG_TYPE "globalisel-utils"
 
@@ -56,12 +59,19 @@ Register llvm::constrainOperandRegClass(
   // Assume physical registers are properly constrained.
   assert(Register::isVirtualRegister(Reg) && "PhysReg not implemented");
 
+  // Save the old register class to check whether
+  // the change notifications will be required.
+  // TODO: A better approach would be to pass
+  // the observers to constrainRegToClass().
+  auto *OldRegClass = MRI.getRegClassOrNull(Reg);
   Register ConstrainedReg = constrainRegToClass(MRI, TII, RBI, Reg, RegClass);
   // If we created a new virtual register because the class is not compatible
   // then create a copy between the new and the old register.
   if (ConstrainedReg != Reg) {
     MachineBasicBlock::iterator InsertIt(&InsertPt);
     MachineBasicBlock &MBB = *InsertPt.getParent();
+    // FIXME: The copy needs to have the classes constrained for its operands.
+    // Use operand's regbank to get the class for old register (Reg).
     if (RegMO.isUse()) {
       BuildMI(MBB, InsertIt, InsertPt.getDebugLoc(),
               TII.get(TargetOpcode::COPY), ConstrainedReg)
@@ -79,7 +89,7 @@ Register llvm::constrainOperandRegClass(
     if (GISelChangeObserver *Observer = MF.getObserver()) {
       Observer->changedInstr(*RegMO.getParent());
     }
-  } else {
+  } else if (OldRegClass != MRI.getRegClassOrNull(Reg)) {
     if (GISelChangeObserver *Observer = MF.getObserver()) {
       if (!RegMO.isDef()) {
         MachineInstr *RegDef = MRI.getVRegDef(Reg);
@@ -101,19 +111,25 @@ Register llvm::constrainOperandRegClass(
   // Assume physical registers are properly constrained.
   assert(Register::isVirtualRegister(Reg) && "PhysReg not implemented");
 
-  const TargetRegisterClass *RegClass = TII.getRegClass(II, OpIdx, &TRI, MF);
+  const TargetRegisterClass *OpRC = TII.getRegClass(II, OpIdx, &TRI, MF);
   // Some of the target independent instructions, like COPY, may not impose any
   // register class constraints on some of their operands: If it's a use, we can
   // skip constraining as the instruction defining the register would constrain
   // it.
 
-  // We can't constrain unallocatable register classes, because we can't create
-  // virtual registers for these classes, so we need to let targets handled this
-  // case.
-  if (RegClass && !RegClass->isAllocatable())
-    RegClass = TRI.getConstrainedRegClassForOperand(RegMO, MRI);
+  if (OpRC) {
+    // Obtain the RC from incoming regbank if it is a proper sub-class. Operands
+    // can have multiple regbanks for a superclass that combine different
+    // register types (E.g., AMDGPU's VGPR and AGPR). The regbank ambiguity
+    // resolved by targets during regbankselect should not be overridden.
+    if (const auto *SubRC = TRI.getCommonSubClass(
+            OpRC, TRI.getConstrainedRegClassForOperand(RegMO, MRI)))
+      OpRC = SubRC;
 
-  if (!RegClass) {
+    OpRC = TRI.getAllocatableClass(OpRC);
+  }
+
+  if (!OpRC) {
     assert((!isTargetSpecificOpcode(II.getOpcode()) || RegMO.isUse()) &&
            "Register class constraint is required unless either the "
            "instruction is target independent or the operand is a use");
@@ -129,7 +145,7 @@ Register llvm::constrainOperandRegClass(
     // and they never reach this function.
     return Reg;
   }
-  return constrainOperandRegClass(MF, TRI, MRI, TII, RBI, InsertPt, *RegClass,
+  return constrainOperandRegClass(MF, TRI, MRI, TII, RBI, InsertPt, *OpRC,
                                   RegMO);
 }
 
@@ -214,7 +230,7 @@ bool llvm::isTriviallyDead(const MachineInstr &MI,
     return false;
 
   // Instructions without side-effects are dead iff they only define dead vregs.
-  for (auto &MO : MI.operands()) {
+  for (const auto &MO : MI.operands()) {
     if (!MO.isReg() || !MO.isDef())
       continue;
 
@@ -269,31 +285,31 @@ void llvm::reportGISelFailure(MachineFunction &MF, const TargetPassConfig &TPC,
   reportGISelFailure(MF, TPC, MORE, R);
 }
 
-Optional<APInt> llvm::getIConstantVRegVal(Register VReg,
-                                          const MachineRegisterInfo &MRI) {
-  Optional<ValueAndVReg> ValAndVReg = getIConstantVRegValWithLookThrough(
+std::optional<APInt> llvm::getIConstantVRegVal(Register VReg,
+                                               const MachineRegisterInfo &MRI) {
+  std::optional<ValueAndVReg> ValAndVReg = getIConstantVRegValWithLookThrough(
       VReg, MRI, /*LookThroughInstrs*/ false);
   assert((!ValAndVReg || ValAndVReg->VReg == VReg) &&
          "Value found while looking through instrs");
   if (!ValAndVReg)
-    return None;
+    return std::nullopt;
   return ValAndVReg->Value;
 }
 
-Optional<int64_t>
+std::optional<int64_t>
 llvm::getIConstantVRegSExtVal(Register VReg, const MachineRegisterInfo &MRI) {
-  Optional<APInt> Val = getIConstantVRegVal(VReg, MRI);
+  std::optional<APInt> Val = getIConstantVRegVal(VReg, MRI);
   if (Val && Val->getBitWidth() <= 64)
     return Val->getSExtValue();
-  return None;
+  return std::nullopt;
 }
 
 namespace {
 
 typedef std::function<bool(const MachineInstr *)> IsOpcodeFn;
-typedef std::function<Optional<APInt>(const MachineInstr *MI)> GetAPCstFn;
+typedef std::function<std::optional<APInt>(const MachineInstr *MI)> GetAPCstFn;
 
-Optional<ValueAndVReg> getConstantVRegValWithLookThrough(
+std::optional<ValueAndVReg> getConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, IsOpcodeFn IsConstantOpcode,
     GetAPCstFn getAPCstValue, bool LookThroughInstrs = true,
     bool LookThroughAnyExt = false) {
@@ -305,8 +321,8 @@ Optional<ValueAndVReg> getConstantVRegValWithLookThrough(
     switch (MI->getOpcode()) {
     case TargetOpcode::G_ANYEXT:
       if (!LookThroughAnyExt)
-        return None;
-      LLVM_FALLTHROUGH;
+        return std::nullopt;
+      [[fallthrough]];
     case TargetOpcode::G_TRUNC:
     case TargetOpcode::G_SEXT:
     case TargetOpcode::G_ZEXT:
@@ -318,21 +334,21 @@ Optional<ValueAndVReg> getConstantVRegValWithLookThrough(
     case TargetOpcode::COPY:
       VReg = MI->getOperand(1).getReg();
       if (Register::isPhysicalRegister(VReg))
-        return None;
+        return std::nullopt;
       break;
     case TargetOpcode::G_INTTOPTR:
       VReg = MI->getOperand(1).getReg();
       break;
     default:
-      return None;
+      return std::nullopt;
     }
   }
   if (!MI || !IsConstantOpcode(MI))
-    return None;
+    return std::nullopt;
 
-  Optional<APInt> MaybeVal = getAPCstValue(MI);
+  std::optional<APInt> MaybeVal = getAPCstValue(MI);
   if (!MaybeVal)
-    return None;
+    return std::nullopt;
   APInt &Val = *MaybeVal;
   while (!SeenOpcodes.empty()) {
     std::pair<unsigned, unsigned> OpcodeAndSize = SeenOpcodes.pop_back_val();
@@ -372,31 +388,31 @@ bool isAnyConstant(const MachineInstr *MI) {
   return Opc == TargetOpcode::G_CONSTANT || Opc == TargetOpcode::G_FCONSTANT;
 }
 
-Optional<APInt> getCImmAsAPInt(const MachineInstr *MI) {
+std::optional<APInt> getCImmAsAPInt(const MachineInstr *MI) {
   const MachineOperand &CstVal = MI->getOperand(1);
   if (CstVal.isCImm())
     return CstVal.getCImm()->getValue();
-  return None;
+  return std::nullopt;
 }
 
-Optional<APInt> getCImmOrFPImmAsAPInt(const MachineInstr *MI) {
+std::optional<APInt> getCImmOrFPImmAsAPInt(const MachineInstr *MI) {
   const MachineOperand &CstVal = MI->getOperand(1);
   if (CstVal.isCImm())
     return CstVal.getCImm()->getValue();
   if (CstVal.isFPImm())
     return CstVal.getFPImm()->getValueAPF().bitcastToAPInt();
-  return None;
+  return std::nullopt;
 }
 
 } // end anonymous namespace
 
-Optional<ValueAndVReg> llvm::getIConstantVRegValWithLookThrough(
+std::optional<ValueAndVReg> llvm::getIConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs) {
   return getConstantVRegValWithLookThrough(VReg, MRI, isIConstant,
                                            getCImmAsAPInt, LookThroughInstrs);
 }
 
-Optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
+std::optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs,
     bool LookThroughAnyExt) {
   return getConstantVRegValWithLookThrough(
@@ -404,12 +420,12 @@ Optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
       LookThroughAnyExt);
 }
 
-Optional<FPValueAndVReg> llvm::getFConstantVRegValWithLookThrough(
+std::optional<FPValueAndVReg> llvm::getFConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs) {
   auto Reg = getConstantVRegValWithLookThrough(
       VReg, MRI, isFConstant, getCImmOrFPImmAsAPInt, LookThroughInstrs);
   if (!Reg)
-    return None;
+    return std::nullopt;
   return FPValueAndVReg{getConstantFPVRegVal(Reg->VReg, MRI)->getValueAPF(),
                         Reg->VReg};
 }
@@ -422,13 +438,13 @@ llvm::getConstantFPVRegVal(Register VReg, const MachineRegisterInfo &MRI) {
   return MI->getOperand(1).getFPImm();
 }
 
-Optional<DefinitionAndSourceRegister>
+std::optional<DefinitionAndSourceRegister>
 llvm::getDefSrcRegIgnoringCopies(Register Reg, const MachineRegisterInfo &MRI) {
   Register DefSrcReg = Reg;
   auto *DefMI = MRI.getVRegDef(Reg);
   auto DstTy = MRI.getType(DefMI->getOperand(0).getReg());
   if (!DstTy.isValid())
-    return None;
+    return std::nullopt;
   unsigned Opc = DefMI->getOpcode();
   while (Opc == TargetOpcode::COPY || isPreISelGenericOptimizationHint(Opc)) {
     Register SrcReg = DefMI->getOperand(1).getReg();
@@ -444,14 +460,14 @@ llvm::getDefSrcRegIgnoringCopies(Register Reg, const MachineRegisterInfo &MRI) {
 
 MachineInstr *llvm::getDefIgnoringCopies(Register Reg,
                                          const MachineRegisterInfo &MRI) {
-  Optional<DefinitionAndSourceRegister> DefSrcReg =
+  std::optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   return DefSrcReg ? DefSrcReg->MI : nullptr;
 }
 
 Register llvm::getSrcRegIgnoringCopies(Register Reg,
                                        const MachineRegisterInfo &MRI) {
-  Optional<DefinitionAndSourceRegister> DefSrcReg =
+  std::optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   return DefSrcReg ? DefSrcReg->Reg : Register();
 }
@@ -475,16 +491,17 @@ APFloat llvm::getAPFloatFromSize(double Val, unsigned Size) {
   return APF;
 }
 
-Optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode, const Register Op1,
-                                        const Register Op2,
-                                        const MachineRegisterInfo &MRI) {
+std::optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode,
+                                             const Register Op1,
+                                             const Register Op2,
+                                             const MachineRegisterInfo &MRI) {
   auto MaybeOp2Cst = getAnyConstantVRegValWithLookThrough(Op2, MRI, false);
   if (!MaybeOp2Cst)
-    return None;
+    return std::nullopt;
 
   auto MaybeOp1Cst = getAnyConstantVRegValWithLookThrough(Op1, MRI, false);
   if (!MaybeOp1Cst)
-    return None;
+    return std::nullopt;
 
   const APInt &C1 = MaybeOp1Cst->Value;
   const APInt &C2 = MaybeOp2Cst->Value;
@@ -492,6 +509,7 @@ Optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode, const Register Op1,
   default:
     break;
   case TargetOpcode::G_ADD:
+  case TargetOpcode::G_PTR_ADD:
     return C1 + C2;
   case TargetOpcode::G_AND:
     return C1 & C2;
@@ -525,21 +543,29 @@ Optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode, const Register Op1,
     if (!C2.getBoolValue())
       break;
     return C1.srem(C2);
+  case TargetOpcode::G_SMIN:
+    return APIntOps::smin(C1, C2);
+  case TargetOpcode::G_SMAX:
+    return APIntOps::smax(C1, C2);
+  case TargetOpcode::G_UMIN:
+    return APIntOps::umin(C1, C2);
+  case TargetOpcode::G_UMAX:
+    return APIntOps::umax(C1, C2);
   }
 
-  return None;
+  return std::nullopt;
 }
 
-Optional<APFloat> llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
-                                            const Register Op2,
-                                            const MachineRegisterInfo &MRI) {
+std::optional<APFloat>
+llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
+                          const Register Op2, const MachineRegisterInfo &MRI) {
   const ConstantFP *Op2Cst = getConstantFPVRegVal(Op2, MRI);
   if (!Op2Cst)
-    return None;
+    return std::nullopt;
 
   const ConstantFP *Op1Cst = getConstantFPVRegVal(Op1, MRI);
   if (!Op1Cst)
-    return None;
+    return std::nullopt;
 
   APFloat C1 = Op1Cst->getValueAPF();
   const APFloat &C2 = Op2Cst->getValueAPF();
@@ -581,36 +607,30 @@ Optional<APFloat> llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
     break;
   }
 
-  return None;
+  return std::nullopt;
 }
 
-Optional<MachineInstr *>
+SmallVector<APInt>
 llvm::ConstantFoldVectorBinop(unsigned Opcode, const Register Op1,
                               const Register Op2,
-                              const MachineRegisterInfo &MRI,
-                              MachineIRBuilder &MIB) {
-  auto *SrcVec1 = getOpcodeDef<GBuildVector>(Op1, MRI);
-  if (!SrcVec1)
-    return None;
+                              const MachineRegisterInfo &MRI) {
   auto *SrcVec2 = getOpcodeDef<GBuildVector>(Op2, MRI);
   if (!SrcVec2)
-    return None;
+    return SmallVector<APInt>();
 
-  const LLT EltTy = MRI.getType(SrcVec1->getSourceReg(0));
+  auto *SrcVec1 = getOpcodeDef<GBuildVector>(Op1, MRI);
+  if (!SrcVec1)
+    return SmallVector<APInt>();
 
-  SmallVector<Register, 16> FoldedElements;
+  SmallVector<APInt> FoldedElements;
   for (unsigned Idx = 0, E = SrcVec1->getNumSources(); Idx < E; ++Idx) {
     auto MaybeCst = ConstantFoldBinOp(Opcode, SrcVec1->getSourceReg(Idx),
                                       SrcVec2->getSourceReg(Idx), MRI);
     if (!MaybeCst)
-      return None;
-    auto FoldedCstReg = MIB.buildConstant(EltTy, *MaybeCst).getReg(0);
-    FoldedElements.emplace_back(FoldedCstReg);
+      return SmallVector<APInt>();
+    FoldedElements.push_back(*MaybeCst);
   }
-  // Create the new vector constant.
-  auto CstVec =
-      MIB.buildBuildVector(MRI.getType(SrcVec1->getReg(0)), FoldedElements);
-  return &*CstVec;
+  return FoldedElements;
 }
 
 bool llvm::isKnownNeverNaN(Register Val, const MachineRegisterInfo &MRI,
@@ -639,6 +659,20 @@ bool llvm::isKnownNeverNaN(Register Val, const MachineRegisterInfo &MRI,
   switch (DefMI->getOpcode()) {
   default:
     break;
+  case TargetOpcode::G_FADD:
+  case TargetOpcode::G_FSUB:
+  case TargetOpcode::G_FMUL:
+  case TargetOpcode::G_FDIV:
+  case TargetOpcode::G_FREM:
+  case TargetOpcode::G_FSIN:
+  case TargetOpcode::G_FCOS:
+  case TargetOpcode::G_FMA:
+  case TargetOpcode::G_FMAD:
+    if (SNaN)
+      return true;
+
+    // TODO: Need isKnownNeverInfinity
+    return false;
   case TargetOpcode::G_FMINNUM_IEEE:
   case TargetOpcode::G_FMAXNUM_IEEE: {
     if (SNaN)
@@ -696,8 +730,7 @@ Register llvm::getFunctionLiveInPhysReg(MachineFunction &MF,
                                         const TargetInstrInfo &TII,
                                         MCRegister PhysReg,
                                         const TargetRegisterClass &RC,
-                                        LLT RegTy) {
-  DebugLoc DL; // FIXME: Is no location the right choice?
+                                        const DebugLoc &DL, LLT RegTy) {
   MachineBasicBlock &EntryMBB = MF.front();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   Register LiveIn = MRI.getLiveInVirtReg(PhysReg);
@@ -726,9 +759,9 @@ Register llvm::getFunctionLiveInPhysReg(MachineFunction &MF,
   return LiveIn;
 }
 
-Optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode, const Register Op1,
-                                        uint64_t Imm,
-                                        const MachineRegisterInfo &MRI) {
+std::optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode,
+                                             const Register Op1, uint64_t Imm,
+                                             const MachineRegisterInfo &MRI) {
   auto MaybeOp1Cst = getIConstantVRegVal(Op1, MRI);
   if (MaybeOp1Cst) {
     switch (Opcode) {
@@ -740,12 +773,12 @@ Optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode, const Register Op1,
     }
     }
   }
-  return None;
+  return std::nullopt;
 }
 
-Optional<APFloat> llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy,
-                                               Register Src,
-                                               const MachineRegisterInfo &MRI) {
+std::optional<APFloat>
+llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy, Register Src,
+                             const MachineRegisterInfo &MRI) {
   assert(Opcode == TargetOpcode::G_SITOFP || Opcode == TargetOpcode::G_UITOFP);
   if (auto MaybeSrcVal = getIConstantVRegVal(Src, MRI)) {
     APFloat DstVal(getFltSemanticForLLT(DstTy));
@@ -753,30 +786,30 @@ Optional<APFloat> llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy,
                             APFloat::rmNearestTiesToEven);
     return DstVal;
   }
-  return None;
+  return std::nullopt;
 }
 
-Optional<SmallVector<unsigned>>
+std::optional<SmallVector<unsigned>>
 llvm::ConstantFoldCTLZ(Register Src, const MachineRegisterInfo &MRI) {
   LLT Ty = MRI.getType(Src);
   SmallVector<unsigned> FoldedCTLZs;
-  auto tryFoldScalar = [&](Register R) -> Optional<unsigned> {
+  auto tryFoldScalar = [&](Register R) -> std::optional<unsigned> {
     auto MaybeCst = getIConstantVRegVal(R, MRI);
     if (!MaybeCst)
-      return None;
+      return std::nullopt;
     return MaybeCst->countLeadingZeros();
   };
   if (Ty.isVector()) {
     // Try to constant fold each element.
     auto *BV = getOpcodeDef<GBuildVector>(Src, MRI);
     if (!BV)
-      return None;
+      return std::nullopt;
     for (unsigned SrcIdx = 0; SrcIdx < BV->getNumSources(); ++SrcIdx) {
       if (auto MaybeFold = tryFoldScalar(BV->getSourceReg(SrcIdx))) {
         FoldedCTLZs.emplace_back(*MaybeFold);
         continue;
       }
-      return None;
+      return std::nullopt;
     }
     return FoldedCTLZs;
   }
@@ -784,12 +817,12 @@ llvm::ConstantFoldCTLZ(Register Src, const MachineRegisterInfo &MRI) {
     FoldedCTLZs.emplace_back(*MaybeCst);
     return FoldedCTLZs;
   }
-  return None;
+  return std::nullopt;
 }
 
 bool llvm::isKnownToBeAPowerOfTwo(Register Reg, const MachineRegisterInfo &MRI,
                                   GISelKnownBits *KB) {
-  Optional<DefinitionAndSourceRegister> DefSrcReg =
+  std::optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   if (!DefSrcReg)
     return false;
@@ -826,10 +859,9 @@ bool llvm::isKnownToBeAPowerOfTwo(Register Reg, const MachineRegisterInfo &MRI,
   case TargetOpcode::G_BUILD_VECTOR: {
     // TODO: Probably should have a recursion depth guard since you could have
     // bitcasted vector elements.
-    for (unsigned I = 1, E = MI.getNumOperands(); I != E; ++I) {
-      if (!isKnownToBeAPowerOfTwo(MI.getOperand(I).getReg(), MRI, KB))
+    for (const MachineOperand &MO : llvm::drop_begin(MI.operands()))
+      if (!isKnownToBeAPowerOfTwo(MO.getReg(), MRI, KB))
         return false;
-    }
 
     return true;
   }
@@ -837,8 +869,8 @@ bool llvm::isKnownToBeAPowerOfTwo(Register Reg, const MachineRegisterInfo &MRI,
     // Only handle constants since we would need to know if number of leading
     // zeros is greater than the truncation amount.
     const unsigned BitWidth = Ty.getScalarSizeInBits();
-    for (unsigned I = 1, E = MI.getNumOperands(); I != E; ++I) {
-      auto Const = getIConstantVRegVal(MI.getOperand(I).getReg(), MRI);
+    for (const MachineOperand &MO : llvm::drop_begin(MI.operands())) {
+      auto Const = getIConstantVRegVal(MO.getReg(), MRI);
       if (!Const || !Const->zextOrTrunc(BitWidth).isPowerOf2())
         return false;
     }
@@ -864,12 +896,6 @@ void llvm::getSelectionDAGFallbackAnalysisUsage(AnalysisUsage &AU) {
   AU.addPreserved<StackProtector>();
 }
 
-static unsigned getLCMSize(unsigned OrigSize, unsigned TargetSize) {
-  unsigned Mul = OrigSize * TargetSize;
-  unsigned GCDSize = greatestCommonDivisor(OrigSize, TargetSize);
-  return Mul / GCDSize;
-}
-
 LLT llvm::getLCMType(LLT OrigTy, LLT TargetTy) {
   const unsigned OrigSize = OrigTy.getSizeInBits();
   const unsigned TargetSize = TargetTy.getSizeInBits();
@@ -884,8 +910,8 @@ LLT llvm::getLCMType(LLT OrigTy, LLT TargetTy) {
       const LLT TargetElt = TargetTy.getElementType();
 
       if (OrigElt.getSizeInBits() == TargetElt.getSizeInBits()) {
-        int GCDElts = greatestCommonDivisor(OrigTy.getNumElements(),
-                                            TargetTy.getNumElements());
+        int GCDElts =
+            std::gcd(OrigTy.getNumElements(), TargetTy.getNumElements());
         // Prefer the original element type.
         ElementCount Mul = OrigTy.getElementCount() * TargetTy.getNumElements();
         return LLT::vector(Mul.divideCoefficientBy(GCDElts),
@@ -896,16 +922,16 @@ LLT llvm::getLCMType(LLT OrigTy, LLT TargetTy) {
         return OrigTy;
     }
 
-    unsigned LCMSize = getLCMSize(OrigSize, TargetSize);
+    unsigned LCMSize = std::lcm(OrigSize, TargetSize);
     return LLT::fixed_vector(LCMSize / OrigElt.getSizeInBits(), OrigElt);
   }
 
   if (TargetTy.isVector()) {
-    unsigned LCMSize = getLCMSize(OrigSize, TargetSize);
+    unsigned LCMSize = std::lcm(OrigSize, TargetSize);
     return LLT::fixed_vector(LCMSize / OrigSize, OrigTy);
   }
 
-  unsigned LCMSize = getLCMSize(OrigSize, TargetSize);
+  unsigned LCMSize = std::lcm(OrigSize, TargetSize);
 
   // Preserve pointer types.
   if (LCMSize == OrigSize)
@@ -914,6 +940,21 @@ LLT llvm::getLCMType(LLT OrigTy, LLT TargetTy) {
     return TargetTy;
 
   return LLT::scalar(LCMSize);
+}
+
+LLT llvm::getCoverTy(LLT OrigTy, LLT TargetTy) {
+  if (!OrigTy.isVector() || !TargetTy.isVector() || OrigTy == TargetTy ||
+      (OrigTy.getScalarSizeInBits() != TargetTy.getScalarSizeInBits()))
+    return getLCMType(OrigTy, TargetTy);
+
+  unsigned OrigTyNumElts = OrigTy.getNumElements();
+  unsigned TargetTyNumElts = TargetTy.getNumElements();
+  if (OrigTyNumElts % TargetTyNumElts == 0)
+    return OrigTy;
+
+  unsigned NumElts = alignTo(OrigTyNumElts, TargetTyNumElts);
+  return LLT::scalarOrVector(ElementCount::getFixed(NumElts),
+                             OrigTy.getElementType());
 }
 
 LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {
@@ -928,8 +969,7 @@ LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {
     if (TargetTy.isVector()) {
       LLT TargetElt = TargetTy.getElementType();
       if (OrigElt.getSizeInBits() == TargetElt.getSizeInBits()) {
-        int GCD = greatestCommonDivisor(OrigTy.getNumElements(),
-                                        TargetTy.getNumElements());
+        int GCD = std::gcd(OrigTy.getNumElements(), TargetTy.getNumElements());
         return LLT::scalarOrVector(ElementCount::getFixed(GCD), OrigElt);
       }
     } else {
@@ -938,7 +978,7 @@ LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {
         return OrigElt;
     }
 
-    unsigned GCD = greatestCommonDivisor(OrigSize, TargetSize);
+    unsigned GCD = std::gcd(OrigSize, TargetSize);
     if (GCD == OrigElt.getSizeInBits())
       return OrigElt;
 
@@ -956,11 +996,11 @@ LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {
       return OrigTy;
   }
 
-  unsigned GCD = greatestCommonDivisor(OrigSize, TargetSize);
+  unsigned GCD = std::gcd(OrigSize, TargetSize);
   return LLT::scalar(GCD);
 }
 
-Optional<int> llvm::getSplatIndex(MachineInstr &MI) {
+std::optional<int> llvm::getSplatIndex(MachineInstr &MI) {
   assert(MI.getOpcode() == TargetOpcode::G_SHUFFLE_VECTOR &&
          "Only G_SHUFFLE_VECTOR can have a splat index!");
   ArrayRef<int> Mask = MI.getOperand(3).getShuffleMask();
@@ -976,7 +1016,7 @@ Optional<int> llvm::getSplatIndex(MachineInstr &MI) {
   int SplatValue = *FirstDefinedIdx;
   if (any_of(make_range(std::next(FirstDefinedIdx), Mask.end()),
              [&SplatValue](int Elt) { return Elt >= 0 && Elt != SplatValue; }))
-    return None;
+    return std::nullopt;
 
   return SplatValue;
 }
@@ -988,17 +1028,17 @@ static bool isBuildVectorOp(unsigned Opcode) {
 
 namespace {
 
-Optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
-                                           const MachineRegisterInfo &MRI,
-                                           bool AllowUndef) {
+std::optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
+                                                const MachineRegisterInfo &MRI,
+                                                bool AllowUndef) {
   MachineInstr *MI = getDefIgnoringCopies(VReg, MRI);
   if (!MI)
-    return None;
+    return std::nullopt;
 
   if (!isBuildVectorOp(MI->getOpcode()))
-    return None;
+    return std::nullopt;
 
-  Optional<ValueAndVReg> SplatValAndReg = None;
+  std::optional<ValueAndVReg> SplatValAndReg;
   for (MachineOperand &Op : MI->uses()) {
     Register Element = Op.getReg();
     auto ElementValAndReg =
@@ -1008,7 +1048,7 @@ Optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
     if (!ElementValAndReg) {
       if (AllowUndef && isa<GImplicitDef>(MRI.getVRegDef(Element)))
         continue;
-      return None;
+      return std::nullopt;
     }
 
     // Record splat value
@@ -1017,38 +1057,68 @@ Optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
 
     // Different constant then the one already recorded, not a constant splat.
     if (SplatValAndReg->Value != ElementValAndReg->Value)
-      return None;
+      return std::nullopt;
   }
 
   return SplatValAndReg;
 }
 
-bool isBuildVectorConstantSplat(const MachineInstr &MI,
-                                const MachineRegisterInfo &MRI,
-                                int64_t SplatValue, bool AllowUndef) {
-  if (auto SplatValAndReg =
-          getAnyConstantSplat(MI.getOperand(0).getReg(), MRI, AllowUndef))
+} // end anonymous namespace
+
+bool llvm::isBuildVectorConstantSplat(const Register Reg,
+                                      const MachineRegisterInfo &MRI,
+                                      int64_t SplatValue, bool AllowUndef) {
+  if (auto SplatValAndReg = getAnyConstantSplat(Reg, MRI, AllowUndef))
     return mi_match(SplatValAndReg->VReg, MRI, m_SpecificICst(SplatValue));
   return false;
 }
 
-} // end anonymous namespace
-
-Optional<int64_t>
-llvm::getBuildVectorConstantSplat(const MachineInstr &MI,
-                                  const MachineRegisterInfo &MRI) {
-  if (auto SplatValAndReg =
-          getAnyConstantSplat(MI.getOperand(0).getReg(), MRI, false))
-    return getIConstantVRegSExtVal(SplatValAndReg->VReg, MRI);
-  return None;
+bool llvm::isBuildVectorConstantSplat(const MachineInstr &MI,
+                                      const MachineRegisterInfo &MRI,
+                                      int64_t SplatValue, bool AllowUndef) {
+  return isBuildVectorConstantSplat(MI.getOperand(0).getReg(), MRI, SplatValue,
+                                    AllowUndef);
 }
 
-Optional<FPValueAndVReg> llvm::getFConstantSplat(Register VReg,
-                                                 const MachineRegisterInfo &MRI,
-                                                 bool AllowUndef) {
+std::optional<APInt>
+llvm::getIConstantSplatVal(const Register Reg, const MachineRegisterInfo &MRI) {
+  if (auto SplatValAndReg =
+          getAnyConstantSplat(Reg, MRI, /* AllowUndef */ false)) {
+    std::optional<ValueAndVReg> ValAndVReg =
+        getIConstantVRegValWithLookThrough(SplatValAndReg->VReg, MRI);
+    return ValAndVReg->Value;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<APInt>
+llvm::getIConstantSplatVal(const MachineInstr &MI,
+                           const MachineRegisterInfo &MRI) {
+  return getIConstantSplatVal(MI.getOperand(0).getReg(), MRI);
+}
+
+std::optional<int64_t>
+llvm::getIConstantSplatSExtVal(const Register Reg,
+                               const MachineRegisterInfo &MRI) {
+  if (auto SplatValAndReg =
+          getAnyConstantSplat(Reg, MRI, /* AllowUndef */ false))
+    return getIConstantVRegSExtVal(SplatValAndReg->VReg, MRI);
+  return std::nullopt;
+}
+
+std::optional<int64_t>
+llvm::getIConstantSplatSExtVal(const MachineInstr &MI,
+                               const MachineRegisterInfo &MRI) {
+  return getIConstantSplatSExtVal(MI.getOperand(0).getReg(), MRI);
+}
+
+std::optional<FPValueAndVReg>
+llvm::getFConstantSplat(Register VReg, const MachineRegisterInfo &MRI,
+                        bool AllowUndef) {
   if (auto SplatValAndReg = getAnyConstantSplat(VReg, MRI, AllowUndef))
     return getFConstantVRegValWithLookThrough(SplatValAndReg->VReg, MRI);
-  return None;
+  return std::nullopt;
 }
 
 bool llvm::isBuildVectorAllZeros(const MachineInstr &MI,
@@ -1063,18 +1133,38 @@ bool llvm::isBuildVectorAllOnes(const MachineInstr &MI,
   return isBuildVectorConstantSplat(MI, MRI, -1, AllowUndef);
 }
 
-Optional<RegOrConstant> llvm::getVectorSplat(const MachineInstr &MI,
-                                             const MachineRegisterInfo &MRI) {
+std::optional<RegOrConstant>
+llvm::getVectorSplat(const MachineInstr &MI, const MachineRegisterInfo &MRI) {
   unsigned Opc = MI.getOpcode();
   if (!isBuildVectorOp(Opc))
-    return None;
-  if (auto Splat = getBuildVectorConstantSplat(MI, MRI))
+    return std::nullopt;
+  if (auto Splat = getIConstantSplatSExtVal(MI, MRI))
     return RegOrConstant(*Splat);
   auto Reg = MI.getOperand(1).getReg();
   if (any_of(make_range(MI.operands_begin() + 2, MI.operands_end()),
              [&Reg](const MachineOperand &Op) { return Op.getReg() != Reg; }))
-    return None;
+    return std::nullopt;
   return RegOrConstant(Reg);
+}
+
+static bool isConstantScalar(const MachineInstr &MI,
+                             const MachineRegisterInfo &MRI,
+                             bool AllowFP = true,
+                             bool AllowOpaqueConstants = true) {
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_CONSTANT:
+  case TargetOpcode::G_IMPLICIT_DEF:
+    return true;
+  case TargetOpcode::G_FCONSTANT:
+    return AllowFP;
+  case TargetOpcode::G_GLOBAL_VALUE:
+  case TargetOpcode::G_FRAME_INDEX:
+  case TargetOpcode::G_BLOCK_ADDR:
+  case TargetOpcode::G_JUMP_TABLE:
+    return AllowOpaqueConstants;
+  default:
+    return false;
+  }
 }
 
 bool llvm::isConstantOrConstantVector(MachineInstr &MI,
@@ -1094,17 +1184,69 @@ bool llvm::isConstantOrConstantVector(MachineInstr &MI,
   return true;
 }
 
-Optional<APInt>
+bool llvm::isConstantOrConstantVector(const MachineInstr &MI,
+                                      const MachineRegisterInfo &MRI,
+                                      bool AllowFP, bool AllowOpaqueConstants) {
+  if (isConstantScalar(MI, MRI, AllowFP, AllowOpaqueConstants))
+    return true;
+
+  if (!isBuildVectorOp(MI.getOpcode()))
+    return false;
+
+  const unsigned NumOps = MI.getNumOperands();
+  for (unsigned I = 1; I != NumOps; ++I) {
+    const MachineInstr *ElementDef = MRI.getVRegDef(MI.getOperand(I).getReg());
+    if (!isConstantScalar(*ElementDef, MRI, AllowFP, AllowOpaqueConstants))
+      return false;
+  }
+
+  return true;
+}
+
+std::optional<APInt>
 llvm::isConstantOrConstantSplatVector(MachineInstr &MI,
                                       const MachineRegisterInfo &MRI) {
   Register Def = MI.getOperand(0).getReg();
   if (auto C = getIConstantVRegValWithLookThrough(Def, MRI))
     return C->Value;
-  auto MaybeCst = getBuildVectorConstantSplat(MI, MRI);
+  auto MaybeCst = getIConstantSplatSExtVal(MI, MRI);
   if (!MaybeCst)
-    return None;
+    return std::nullopt;
   const unsigned ScalarSize = MRI.getType(Def).getScalarSizeInBits();
   return APInt(ScalarSize, *MaybeCst, true);
+}
+
+bool llvm::isNullOrNullSplat(const MachineInstr &MI,
+                             const MachineRegisterInfo &MRI, bool AllowUndefs) {
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_IMPLICIT_DEF:
+    return AllowUndefs;
+  case TargetOpcode::G_CONSTANT:
+    return MI.getOperand(1).getCImm()->isNullValue();
+  case TargetOpcode::G_FCONSTANT: {
+    const ConstantFP *FPImm = MI.getOperand(1).getFPImm();
+    return FPImm->isZero() && !FPImm->isNegative();
+  }
+  default:
+    if (!AllowUndefs) // TODO: isBuildVectorAllZeros assumes undef is OK already
+      return false;
+    return isBuildVectorAllZeros(MI, MRI);
+  }
+}
+
+bool llvm::isAllOnesOrAllOnesSplat(const MachineInstr &MI,
+                                   const MachineRegisterInfo &MRI,
+                                   bool AllowUndefs) {
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_IMPLICIT_DEF:
+    return AllowUndefs;
+  case TargetOpcode::G_CONSTANT:
+    return MI.getOperand(1).getCImm()->isAllOnesValue();
+  default:
+    if (!AllowUndefs) // TODO: isBuildVectorAllOnes assumes undef is OK already
+      return false;
+    return isBuildVectorAllOnes(MI, MRI);
+  }
 }
 
 bool llvm::matchUnaryPredicate(
@@ -1152,6 +1294,18 @@ bool llvm::isConstTrueVal(const TargetLowering &TLI, int64_t Val, bool IsVector,
   llvm_unreachable("Invalid boolean contents");
 }
 
+bool llvm::isConstFalseVal(const TargetLowering &TLI, int64_t Val,
+                           bool IsVector, bool IsFP) {
+  switch (TLI.getBooleanContents(IsVector, IsFP)) {
+  case TargetLowering::UndefinedBooleanContent:
+    return ~Val & 0x1;
+  case TargetLowering::ZeroOrOneBooleanContent:
+  case TargetLowering::ZeroOrNegativeOneBooleanContent:
+    return Val == 0;
+  }
+  llvm_unreachable("Invalid boolean contents");
+}
+
 int64_t llvm::getICmpTrueVal(const TargetLowering &TLI, bool IsVector,
                              bool IsFP) {
   switch (TLI.getBooleanContents(IsVector, IsFP)) {
@@ -1171,25 +1325,6 @@ bool llvm::shouldOptForSize(const MachineBasicBlock &MBB,
          llvm::shouldOptimizeForSize(MBB.getBasicBlock(), PSI, BFI);
 }
 
-/// These artifacts generally don't have any debug users because they don't
-/// directly originate from IR instructions, but instead usually from
-/// legalization. Avoiding checking for debug users improves compile time.
-/// Note that truncates or extends aren't included because they have IR
-/// counterparts which can have debug users after translation.
-static bool shouldSkipDbgValueFor(MachineInstr &MI) {
-  switch (MI.getOpcode()) {
-  case TargetOpcode::G_UNMERGE_VALUES:
-  case TargetOpcode::G_MERGE_VALUES:
-  case TargetOpcode::G_CONCAT_VECTORS:
-  case TargetOpcode::G_BUILD_VECTOR:
-  case TargetOpcode::G_EXTRACT:
-  case TargetOpcode::G_INSERT:
-    return true;
-  default:
-    return false;
-  }
-}
-
 void llvm::saveUsesAndErase(MachineInstr &MI, MachineRegisterInfo &MRI,
                             LostDebugLocObserver *LocObserver,
                             SmallInstListTy &DeadInstChain) {
@@ -1199,10 +1334,7 @@ void llvm::saveUsesAndErase(MachineInstr &MI, MachineRegisterInfo &MRI,
   }
   LLVM_DEBUG(dbgs() << MI << "Is dead; erasing.\n");
   DeadInstChain.remove(&MI);
-  if (shouldSkipDbgValueFor(MI))
-    MI.eraseFromParent();
-  else
-    MI.eraseFromParentAndMarkDBGValuesForRemoval();
+  MI.eraseFromParent();
   if (LocObserver)
     LocObserver->checkpoint(false);
 }
@@ -1225,4 +1357,23 @@ void llvm::eraseInstrs(ArrayRef<MachineInstr *> DeadInstrs,
 void llvm::eraseInstr(MachineInstr &MI, MachineRegisterInfo &MRI,
                       LostDebugLocObserver *LocObserver) {
   return eraseInstrs({&MI}, MRI, LocObserver);
+}
+
+void llvm::salvageDebugInfo(const MachineRegisterInfo &MRI, MachineInstr &MI) {
+  for (auto &Def : MI.defs()) {
+    assert(Def.isReg() && "Must be a reg");
+
+    SmallVector<MachineOperand *, 16> DbgUsers;
+    for (auto &MOUse : MRI.use_operands(Def.getReg())) {
+      MachineInstr *DbgValue = MOUse.getParent();
+      // Ignore partially formed DBG_VALUEs.
+      if (DbgValue->isNonListDebugValue() && DbgValue->getNumOperands() == 4) {
+        DbgUsers.push_back(&MOUse);
+      }
+    }
+
+    if (!DbgUsers.empty()) {
+      salvageDebugInfoForDbgValue(MRI, MI, DbgUsers);
+    }
+  }
 }

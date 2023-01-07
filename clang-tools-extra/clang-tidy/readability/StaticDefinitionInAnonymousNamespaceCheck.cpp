@@ -22,7 +22,7 @@ void StaticDefinitionInAnonymousNamespaceCheck::registerMatchers(
   Finder->addMatcher(
       namedDecl(anyOf(functionDecl(isDefinition(), isStaticStorageClass()),
                       varDecl(isDefinition(), isStaticStorageClass())),
-                hasParent(namespaceDecl(isAnonymous())))
+                isInAnonymousNamespace())
           .bind("static-def"),
       this);
 }

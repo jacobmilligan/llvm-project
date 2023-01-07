@@ -43,7 +43,9 @@ class TargetTransformInfo;
 /// This class provides both the logic to recursively visit instructions and
 /// combine them.
 class LLVM_LIBRARY_VISIBILITY InstCombiner {
-  /// Only used to call target specific inst combining.
+  /// Only used to call target specific intrinsic combining.
+  /// It must **NOT** be used for any other purpose, as InstCombine is a
+  /// target-independent canonicalization transform.
   TargetTransformInfo &TTI;
 
 public:
@@ -91,7 +93,7 @@ public:
         MinimizeSize(MinimizeSize), AA(AA), AC(AC), TLI(TLI), DT(DT), DL(DL),
         SQ(DL, &TLI, &DT, &AC), ORE(ORE), BFI(BFI), PSI(PSI), LI(LI) {}
 
-  virtual ~InstCombiner() {}
+  virtual ~InstCombiner() = default;
 
   /// Return the source operand of a potentially bitcasted value while
   /// optionally checking if it has one use. If there is no bitcast or the one
@@ -206,7 +208,7 @@ public:
     return ConstantExpr::getSub(C, ConstantInt::get(C->getType(), 1));
   }
 
-  llvm::Optional<std::pair<
+  std::optional<std::pair<
       CmpInst::Predicate,
       Constant *>> static getFlippedStrictnessPredicateAndConstant(CmpInst::
                                                                        Predicate
@@ -271,9 +273,10 @@ public:
 
   /// Given i1 V, can every user of V be freely adapted if V is changed to !V ?
   /// InstCombine's freelyInvertAllUsersOf() must be kept in sync with this fn.
+  /// NOTE: for Instructions only!
   ///
   /// See also: isFreeToInvert()
-  static bool canFreelyInvertAllUsersOf(Value *V, Value *IgnoredUser) {
+  static bool canFreelyInvertAllUsersOf(Instruction *V, Value *IgnoredUser) {
     // Look at every user of V.
     for (Use &U : V->uses()) {
       if (U.getUser() == IgnoredUser)
@@ -376,12 +379,12 @@ public:
   LoopInfo *getLoopInfo() const { return LI; }
 
   // Call target specific combiners
-  Optional<Instruction *> targetInstCombineIntrinsic(IntrinsicInst &II);
-  Optional<Value *>
+  std::optional<Instruction *> targetInstCombineIntrinsic(IntrinsicInst &II);
+  std::optional<Value *>
   targetSimplifyDemandedUseBitsIntrinsic(IntrinsicInst &II, APInt DemandedMask,
                                          KnownBits &Known,
                                          bool &KnownBitsComputed);
-  Optional<Value *> targetSimplifyDemandedVectorEltsIntrinsic(
+  std::optional<Value *> targetSimplifyDemandedVectorEltsIntrinsic(
       IntrinsicInst &II, APInt DemandedElts, APInt &UndefElts,
       APInt &UndefElts2, APInt &UndefElts3,
       std::function<void(Instruction *, unsigned, APInt, APInt &)>
@@ -395,8 +398,8 @@ public:
     assert(New && !New->getParent() &&
            "New instruction already inserted into a basic block!");
     BasicBlock *BB = Old.getParent();
-    BB->getInstList().insert(Old.getIterator(), New); // Insert inst
-    Worklist.push(New);
+    New->insertInto(BB, Old.getIterator()); // Insert inst
+    Worklist.add(New);
     return New;
   }
 
@@ -415,18 +418,21 @@ public:
   Instruction *replaceInstUsesWith(Instruction &I, Value *V) {
     // If there are no uses to replace, then we return nullptr to indicate that
     // no changes were made to the program.
-    if (I.use_empty())
-      return nullptr;
+    if (I.use_empty()) return nullptr;
 
     Worklist.pushUsersToWorkList(I); // Add all modified instrs to worklist.
 
     // If we are replacing the instruction with itself, this must be in a
     // segment of unreachable code, so just clobber the instruction.
     if (&I == V)
-      V = UndefValue::get(I.getType());
+      V = PoisonValue::get(I.getType());
 
     LLVM_DEBUG(dbgs() << "IC: Replacing " << I << "\n"
                       << "    with " << *V << '\n');
+
+    // If V is a new unnamed instruction, take the name from the old one.
+    if (V->use_empty() && isa<Instruction>(V) && !V->hasName() && I.hasName())
+      V->takeName(&I);
 
     I.replaceAllUsesWith(V);
     return &I;
@@ -476,6 +482,11 @@ public:
   unsigned ComputeNumSignBits(const Value *Op, unsigned Depth = 0,
                               const Instruction *CxtI = nullptr) const {
     return llvm::ComputeNumSignBits(Op, DL, Depth, &AC, CxtI, &DT);
+  }
+
+  unsigned ComputeMaxSignificantBits(const Value *Op, unsigned Depth = 0,
+                                     const Instruction *CxtI = nullptr) const {
+    return llvm::ComputeMaxSignificantBits(Op, DL, Depth, &AC, CxtI, &DT);
   }
 
   OverflowResult computeOverflowForUnsignedMul(const Value *LHS,

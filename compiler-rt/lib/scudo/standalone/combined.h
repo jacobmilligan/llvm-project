@@ -18,6 +18,7 @@
 #include "options.h"
 #include "quarantine.h"
 #include "report.h"
+#include "rss_limit_checker.h"
 #include "secondary.h"
 #include "stack_depot.h"
 #include "string_utils.h"
@@ -146,6 +147,9 @@ public:
 
     initFlags();
     reportUnrecognizedFlags();
+
+    RssChecker.init(scudo::getFlags()->soft_rss_limit_mb,
+                    scudo::getFlags()->hard_rss_limit_mb);
 
     // Store some flags locally.
     if (getFlags()->may_return_null)
@@ -345,6 +349,19 @@ public:
       reportAllocationSizeTooBig(Size, NeededSize, MaxAllowedMallocSize);
     }
     DCHECK_LE(Size, NeededSize);
+
+    switch (RssChecker.getRssLimitExceeded()) {
+    case RssLimitChecker::Neither:
+      break;
+    case RssLimitChecker::Soft:
+      if (Options.get(OptionBit::MayReturnNull))
+        return nullptr;
+      reportSoftRSSLimit(RssChecker.getSoftRssLimit());
+      break;
+    case RssLimitChecker::Hard:
+      reportHardRSSLimit(RssChecker.getHardRssLimit());
+      break;
+    }
 
     void *Block = nullptr;
     uptr ClassId = 0;
@@ -856,6 +873,13 @@ public:
            Header.State == Chunk::State::Allocated;
   }
 
+  void setRssLimitsTestOnly(int SoftRssLimitMb, int HardRssLimitMb,
+                            bool MayReturnNull) {
+    RssChecker.init(SoftRssLimitMb, HardRssLimitMb);
+    if (MayReturnNull)
+      Primary.Options.set(OptionBit::MayReturnNull);
+  }
+
   bool useMemoryTaggingTestOnly() const {
     return useMemoryTagging<Params>(Primary.Options.load());
   }
@@ -994,6 +1018,7 @@ private:
   QuarantineT Quarantine;
   TSDRegistryT TSDRegistry;
   pthread_once_t PostInitNonce = PTHREAD_ONCE_INIT;
+  RssLimitChecker RssChecker;
 
 #ifdef GWP_ASAN_HOOKS
   gwp_asan::GuardedPoolAllocator GuardedAlloc;
@@ -1271,8 +1296,8 @@ private:
   }
 
   static const size_t NumErrorReports =
-      sizeof(((scudo_error_info *)0)->reports) /
-      sizeof(((scudo_error_info *)0)->reports[0]);
+      sizeof(((scudo_error_info *)nullptr)->reports) /
+      sizeof(((scudo_error_info *)nullptr)->reports[0]);
 
   static void getInlineErrorInfo(struct scudo_error_info *ErrorInfo,
                                  size_t &NextErrorReport, uintptr_t FaultAddr,

@@ -47,7 +47,7 @@ static void signed_width(unsigned Width, uint64_t Value,
                   " to " + std::to_string(Max) + ")";
 
     if (Ctx) {
-      Ctx->reportFatalError(Fixup.getLoc(), Diagnostic);
+      Ctx->reportError(Fixup.getLoc(), Diagnostic);
     } else {
       llvm_unreachable(Diagnostic.c_str());
     }
@@ -66,7 +66,7 @@ static void unsigned_width(unsigned Width, uint64_t Value,
         " (expected an integer in the range 0 to " + std::to_string(Max) + ")";
 
     if (Ctx) {
-      Ctx->reportFatalError(Fixup.getLoc(), Diagnostic);
+      Ctx->reportError(Fixup.getLoc(), Diagnostic);
     } else {
       llvm_unreachable(Diagnostic.c_str());
     }
@@ -185,6 +185,16 @@ static void fixup_port6(const MCFixup &Fixup, uint64_t &Value,
   unsigned_width(6, Value, std::string("port number"), Fixup, Ctx);
 
   Value = ((Value & 0x30) << 5) | (Value & 0x0f);
+}
+
+/// 7-bit data space address fixup for the LDS/STS instructions on AVRTiny.
+///
+/// Resolves to:
+/// 1010 ikkk dddd kkkk
+static void fixup_lds_sts_16(const MCFixup &Fixup, uint64_t &Value,
+                             MCContext *Ctx = nullptr) {
+  unsigned_width(7, Value, std::string("immediate"), Fixup, Ctx);
+  Value = ((Value & 0x70) << 8) | (Value & 0x0f);
 }
 
 /// Adjusts a program memory address.
@@ -341,6 +351,10 @@ void AVRAsmBackend::adjustFixupValue(const MCFixup &Fixup,
 
   case AVR::fixup_port6:
     adjust::fixup_port6(Fixup, Value, Ctx);
+    break;
+
+  case AVR::fixup_lds_sts_16:
+    adjust::fixup_lds_sts_16(Fixup, Value, Ctx);
     break;
 
   // Fixups which do not require adjustments.

@@ -87,17 +87,30 @@ std::size_t Component::SizeInBytes(const Descriptor &instance) const {
 
 void Component::EstablishDescriptor(Descriptor &descriptor,
     const Descriptor &container, Terminator &terminator) const {
+  ISO::CFI_attribute_t attribute{static_cast<ISO::CFI_attribute_t>(
+      genre_ == Genre::Allocatable   ? CFI_attribute_allocatable
+          : genre_ == Genre::Pointer ? CFI_attribute_pointer
+                                     : CFI_attribute_other)};
   TypeCategory cat{category()};
   if (cat == TypeCategory::Character) {
-    auto length{characterLen_.GetValue(&container)};
-    RUNTIME_CHECK(terminator, length.has_value());
-    descriptor.Establish(kind_, *length / kind_, nullptr, rank_);
+    std::size_t lengthInChars{0};
+    if (auto length{characterLen_.GetValue(&container)}) {
+      lengthInChars = static_cast<std::size_t>(*length);
+    } else {
+      RUNTIME_CHECK(
+          terminator, characterLen_.genre() == Value::Genre::Deferred);
+    }
+    descriptor.Establish(
+        kind_, lengthInChars, nullptr, rank_, nullptr, attribute);
   } else if (cat == TypeCategory::Derived) {
-    const DerivedType *type{derivedType()};
-    RUNTIME_CHECK(terminator, type != nullptr);
-    descriptor.Establish(*type, nullptr, rank_);
+    if (const DerivedType * type{derivedType()}) {
+      descriptor.Establish(*type, nullptr, rank_, nullptr, attribute);
+    } else { // unlimited polymorphic
+      descriptor.Establish(TypeCode{TypeCategory::Derived, 0}, 0, nullptr,
+          rank_, nullptr, attribute, true);
+    }
   } else {
-    descriptor.Establish(cat, kind_, nullptr, rank_);
+    descriptor.Establish(cat, kind_, nullptr, rank_, nullptr, attribute);
   }
   if (rank_ && genre_ != Genre::Allocatable) {
     const typeInfo::Value *boundValues{bounds()};
@@ -116,11 +129,15 @@ void Component::EstablishDescriptor(Descriptor &descriptor,
 }
 
 void Component::CreatePointerDescriptor(Descriptor &descriptor,
-    const Descriptor &container, const SubscriptValue subscripts[],
-    Terminator &terminator) const {
+    const Descriptor &container, Terminator &terminator,
+    const SubscriptValue *subscripts) const {
   RUNTIME_CHECK(terminator, genre_ == Genre::Data);
   EstablishDescriptor(descriptor, container, terminator);
-  descriptor.set_base_addr(container.Element<char>(subscripts) + offset_);
+  if (subscripts) {
+    descriptor.set_base_addr(container.Element<char>(subscripts) + offset_);
+  } else {
+    descriptor.set_base_addr(container.OffsetElement<char>() + offset_);
+  }
   descriptor.raw().attribute = CFI_attribute_pointer;
 }
 
@@ -167,12 +184,11 @@ static void DumpScalarCharacter(
 }
 
 FILE *DerivedType::Dump(FILE *f) const {
-  std::fprintf(
-      f, "DerivedType @ 0x%p:\n", reinterpret_cast<const void *>(this));
+  std::fprintf(f, "DerivedType @ %p:\n", reinterpret_cast<const void *>(this));
   const std::uint64_t *uints{reinterpret_cast<const std::uint64_t *>(this)};
   for (int j{0}; j < 64; ++j) {
     int offset{j * static_cast<int>(sizeof *uints)};
-    std::fprintf(f, "    [+%3d](0x%p) 0x%016jx", offset,
+    std::fprintf(f, "    [+%3d](%p) 0x%016jx", offset,
         reinterpret_cast<const void *>(&uints[j]),
         static_cast<std::uintmax_t>(uints[j]));
     if (offset == offsetof(DerivedType, binding_)) {
@@ -235,7 +251,7 @@ FILE *DerivedType::Dump(FILE *f) const {
 }
 
 FILE *Component::Dump(FILE *f) const {
-  std::fprintf(f, "Component @ 0x%p:\n", reinterpret_cast<const void *>(this));
+  std::fprintf(f, "Component @ %p:\n", reinterpret_cast<const void *>(this));
   std::fputs("    name: ", f);
   DumpScalarCharacter(f, name(), "Component::name");
   if (genre_ == Genre::Data) {
@@ -252,7 +268,7 @@ FILE *Component::Dump(FILE *f) const {
   std::fprintf(f, " category %d  kind %d  rank %d  offset 0x%zx\n", category_,
       kind_, rank_, static_cast<std::size_t>(offset_));
   if (initialization_) {
-    std::fprintf(f, " initialization @ 0x%p:\n",
+    std::fprintf(f, " initialization @ %p:\n",
         reinterpret_cast<const void *>(initialization_));
     for (int j{0}; j < 128; j += sizeof(std::uint64_t)) {
       std::fprintf(f, " [%3d] 0x%016jx\n", j,
@@ -265,7 +281,7 @@ FILE *Component::Dump(FILE *f) const {
 
 FILE *SpecialBinding::Dump(FILE *f) const {
   std::fprintf(
-      f, "SpecialBinding @ 0x%p:\n", reinterpret_cast<const void *>(this));
+      f, "SpecialBinding @ %p:\n", reinterpret_cast<const void *>(this));
   switch (which_) {
   case Which::ScalarAssignment:
     std::fputs("    ScalarAssignment", f);
@@ -297,7 +313,7 @@ FILE *SpecialBinding::Dump(FILE *f) const {
     break;
   }
   std::fprintf(f, "    isArgDescriptorSet: 0x%x\n", isArgDescriptorSet_);
-  std::fprintf(f, "    proc: 0x%p\n", reinterpret_cast<void *>(proc_));
+  std::fprintf(f, "    proc: %p\n", reinterpret_cast<void *>(proc_));
   return f;
 }
 

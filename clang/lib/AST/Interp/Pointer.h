@@ -26,10 +26,7 @@ namespace clang {
 namespace interp {
 class Block;
 class DeadBlock;
-class Context;
-class InterpState;
 class Pointer;
-class Function;
 enum PrimType : unsigned;
 
 /// A pointer to a memory block, live or dead.
@@ -249,7 +246,7 @@ public:
   }
 
   /// Returns the declaration ID.
-  llvm::Optional<unsigned> getDeclID() const { return Pointee->getDeclID(); }
+  std::optional<unsigned> getDeclID() const { return Pointee->getDeclID(); }
 
   /// Returns the byte offset from the start.
   unsigned getByteOffset() const {

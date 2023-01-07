@@ -16,6 +16,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
@@ -39,8 +40,9 @@ namespace LLVM {
 
 namespace detail {
 class DebugTranslation;
-} // end namespace detail
+} // namespace detail
 
+class DINodeAttr;
 class LLVMFuncOp;
 
 /// Implementation class for module translation. Holds a reference to the module
@@ -146,6 +148,10 @@ public:
   // Sets LLVM metadata for memory operations that have alias scope information.
   void setAliasScopeMetadata(Operation *op, llvm::Instruction *inst);
 
+  /// Sets LLVM TBAA metadata for memory operations that have
+  /// TBAA attributes.
+  void setTBAAMetadata(Operation *op, llvm::Instruction *inst);
+
   /// Converts the type from MLIR LLVM dialect to LLVM.
   llvm::Type *convertType(Type type);
 
@@ -174,6 +180,9 @@ public:
   /// Translates the given location.
   const llvm::DILocation *translateLoc(Location loc, llvm::DILocalScope *scope);
 
+  /// Translates the given LLVM debug info metadata.
+  llvm::Metadata *translateDebugInfo(LLVM::DINodeAttr attr);
+
   /// Translates the contents of the given block to LLVM IR using this
   /// translator. The LLVM IR basic block corresponding to the given block is
   /// expected to exist in the mapping of this translator. Uses `builder` to
@@ -191,7 +200,7 @@ public:
   /// Common CRTP base class for ModuleTranslation stack frames.
   class StackFrame {
   public:
-    virtual ~StackFrame() {}
+    virtual ~StackFrame() = default;
     TypeID getTypeID() const { return typeID; }
 
   protected:
@@ -264,6 +273,8 @@ public:
     ModuleTranslation &moduleTranslation;
   };
 
+  SymbolTableCollection& symbolTable() { return symbolTableCollection; }
+
 private:
   ModuleTranslation(Operation *module,
                     std::unique_ptr<llvm::Module> llvmModule);
@@ -283,6 +294,14 @@ private:
   /// Process alias.scope LLVM Metadata operations and create LLVM
   /// metadata nodes for them and their domains.
   LogicalResult createAliasScopeMetadata();
+
+  /// Returns the LLVM metadata corresponding to a reference to an mlir LLVM
+  /// dialect TBAATagOp operation.
+  llvm::MDNode *getTBAANode(Operation &memOp, SymbolRefAttr tagRef) const;
+
+  /// Process tbaa LLVM Metadata operations and create LLVM
+  /// metadata nodes for them.
+  LogicalResult createTBAAMetadata();
 
   /// Translates dialect attributes attached to the given operation.
   LogicalResult convertDialectAttributes(Operation *op);
@@ -326,13 +345,20 @@ private:
   /// attribute.
   DenseMap<Attribute, llvm::MDNode *> loopOptionsMetadataMapping;
 
-  /// Mapping from an access scope metadata operation to its LLVM metadata.
+  /// Mapping from an alias scope metadata operation to its LLVM metadata.
   /// This map is populated on module entry.
   DenseMap<Operation *, llvm::MDNode *> aliasScopeMetadataMapping;
+
+  /// Mapping from a tbaa metadata operation to its LLVM metadata.
+  /// This map is populated on module entry.
+  DenseMap<const Operation *, llvm::MDNode *> tbaaMetadataMapping;
 
   /// Stack of user-specified state elements, useful when translating operations
   /// with regions.
   SmallVector<std::unique_ptr<StackFrame>> stack;
+
+  /// A cache for the symbol tables constructed during symbols lookup.
+  SymbolTableCollection symbolTableCollection;
 };
 
 namespace detail {
@@ -351,22 +377,13 @@ SetVector<Block *> getTopologicallySortedBlocks(Region &region);
 /// report it to `loc` and return nullptr.
 llvm::Constant *getLLVMConstant(llvm::Type *llvmType, Attribute attr,
                                 Location loc,
-                                const ModuleTranslation &moduleTranslation,
-                                bool isTopLevel = true);
+                                const ModuleTranslation &moduleTranslation);
 
 /// Creates a call to an LLVM IR intrinsic function with the given arguments.
 llvm::Value *createIntrinsicCall(llvm::IRBuilderBase &builder,
                                  llvm::Intrinsic::ID intrinsic,
                                  ArrayRef<llvm::Value *> args = {},
                                  ArrayRef<llvm::Type *> tys = {});
-
-/// Creates a call to an LLVM IR intrinsic function with the given arguments
-/// for NVVM WMMA ops. Handles cases where the intrinsic name is overloaded
-/// using the types of arguments supplied. Selects the correct intrinsic
-/// by inspecting the argument types.
-llvm::Value *createNvvmIntrinsicCall(llvm::IRBuilderBase &builder,
-                                     llvm::Intrinsic::ID intrinsic,
-                                     ArrayRef<llvm::Value *> args = {});
 } // namespace detail
 
 } // namespace LLVM

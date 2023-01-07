@@ -48,11 +48,9 @@ public:
 
   bool hasFeature(StringRef Feature) const override;
 
-  bool hasSjLjLowering() const override { return true; }
-
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
     // FIXME: Implement!
-    return None;
+    return std::nullopt;
   }
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::VoidPtrBuiltinVaList;
@@ -178,8 +176,7 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
-  bool hasSjLjLowering() const override { return true; }
-  bool hasExtIntType() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 
 // SPARCV8el is the 32-bit little-endian mode selected by Triple::sparcel.
@@ -232,7 +229,7 @@ public:
     return getCPUGeneration(CPU) == CG_V9;
   }
 
-  bool hasExtIntType() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 } // namespace targets
 } // namespace clang

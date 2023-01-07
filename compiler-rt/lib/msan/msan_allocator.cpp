@@ -59,8 +59,7 @@ struct AP32 {
 };
 typedef SizeClassAllocator32<AP32> PrimaryAllocator;
 #elif defined(__x86_64__)
-#if SANITIZER_NETBSD || \
-    (SANITIZER_LINUX && !defined(MSAN_LINUX_X86_64_OLD_MAPPING))
+#if SANITIZER_NETBSD || SANITIZER_LINUX
 static const uptr kAllocatorSpace = 0x700000000000ULL;
 #else
 static const uptr kAllocatorSpace = 0x600000000000ULL;
@@ -108,7 +107,7 @@ struct AP64 {  // Allocator64 parameters. Deliberately using a short name.
 
 typedef SizeClassAllocator64<AP64> PrimaryAllocator;
 #elif defined(__aarch64__)
-static const uptr kMaxAllowedMallocSize = 2UL << 30;  // 2G
+static const uptr kMaxAllowedMallocSize = 8UL << 30;
 
 struct AP32 {
   static const uptr kSpaceBeg = 0;
@@ -160,6 +159,11 @@ static void *MsanAllocate(StackTrace *stack, uptr size, uptr alignment,
     }
     ReportAllocationSizeTooBig(size, max_malloc_size, stack);
   }
+  if (UNLIKELY(IsRssLimitExceeded())) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportRssLimitExceeded(stack);
+  }
   MsanThread *t = GetCurrentThread();
   void *allocated;
   if (t) {
@@ -189,13 +193,16 @@ static void *MsanAllocate(StackTrace *stack, uptr size, uptr alignment,
       __msan_set_origin(allocated, size, o.raw_id());
     }
   }
-  MSAN_MALLOC_HOOK(allocated, size);
+  UnpoisonParam(2);
+  RunMallocHooks(allocated, size);
   return allocated;
 }
 
 void MsanDeallocate(StackTrace *stack, void *p) {
   CHECK(p);
-  MSAN_FREE_HOOK(p);
+  UnpoisonParam(1);
+  RunFreeHooks(p);
+
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
   uptr size = meta->requested_size;
   meta->requested_size = 0;

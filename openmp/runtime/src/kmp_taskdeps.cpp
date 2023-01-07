@@ -45,6 +45,9 @@ static void __kmp_init_node(kmp_depnode_t *node) {
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
   node->dn.id = KMP_ATOMIC_INC(&kmp_node_id_seed);
 #endif
+#if USE_ITT_BUILD && USE_ITT_NOTIFY
+  __itt_sync_create(node, "OMP task dep node", NULL, 0);
+#endif
 }
 
 static inline kmp_depnode_t *__kmp_node_ref(kmp_depnode_t *node) {
@@ -741,10 +744,24 @@ Blocks the current task until all specifies dependences have been fulfilled.
 void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
                           kmp_depend_info_t *dep_list, kmp_int32 ndeps_noalias,
                           kmp_depend_info_t *noalias_dep_list) {
-  KA_TRACE(10, ("__kmpc_omp_wait_deps(enter): T#%d loc=%p\n", gtid, loc_ref));
+  __kmpc_omp_taskwait_deps_51(loc_ref, gtid, ndeps, dep_list, ndeps_noalias,
+                              noalias_dep_list, false);
+}
 
+/* __kmpc_omp_taskwait_deps_51 : Function for OpenMP 5.1 nowait clause.
+                                 Placeholder for taskwait with nowait clause.
+                                 Earlier code of __kmpc_omp_wait_deps() is now
+                                 in this function.
+*/
+void __kmpc_omp_taskwait_deps_51(ident_t *loc_ref, kmp_int32 gtid,
+                                 kmp_int32 ndeps, kmp_depend_info_t *dep_list,
+                                 kmp_int32 ndeps_noalias,
+                                 kmp_depend_info_t *noalias_dep_list,
+                                 kmp_int32 has_no_wait) {
+  KA_TRACE(10, ("__kmpc_omp_taskwait_deps(enter): T#%d loc=%p nowait#%d\n",
+                gtid, loc_ref, has_no_wait));
   if (ndeps == 0 && ndeps_noalias == 0) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no dependences to "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no dependences to "
                   "wait upon : loc=%p\n",
                   gtid, loc_ref));
     return;
@@ -829,12 +846,14 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
   bool ignore = current_task->td_flags.team_serial ||
                 current_task->td_flags.tasking_ser ||
                 current_task->td_flags.final;
-  ignore = ignore && thread->th.th_task_team != NULL &&
-           thread->th.th_task_team->tt.tt_found_proxy_tasks == FALSE;
+  ignore =
+      ignore && thread->th.th_task_team != NULL &&
+      thread->th.th_task_team->tt.tt_found_proxy_tasks == FALSE &&
+      thread->th.th_task_team->tt.tt_hidden_helper_task_encountered == FALSE;
   ignore = ignore || current_task->td_dephash == NULL;
 
   if (ignore) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no blocking "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no blocking "
                   "dependences : loc=%p\n",
                   gtid, loc_ref));
 #if OMPT_SUPPORT
@@ -849,7 +868,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
   if (!__kmp_check_deps(gtid, &node, NULL, &current_task->td_dephash,
                         DEP_BARRIER, ndeps, dep_list, ndeps_noalias,
                         noalias_dep_list)) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no blocking "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no blocking "
                   "dependences : loc=%p\n",
                   gtid, loc_ref));
 #if OMPT_SUPPORT
@@ -870,6 +889,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
 #if OMPT_SUPPORT
   __ompt_taskwait_dep_finish(current_task, taskwait_task_data);
 #endif /* OMPT_SUPPORT */
-  KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d finished waiting : loc=%p\n",
+  KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d finished waiting : loc=%p\
+                \n",
                 gtid, loc_ref));
 }

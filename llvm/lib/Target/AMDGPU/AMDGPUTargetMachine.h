@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// The AMDGPU TargetMachine interface definition for hw codgen targets.
+/// The AMDGPU TargetMachine interface definition for hw codegen targets.
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,10 +17,10 @@
 #include "GCNSubtarget.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Target/TargetMachine.h"
+#include <optional>
+#include <utility>
 
 namespace llvm {
-
-class ScheduleDAGMILive;
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Target Machine (R600+)
@@ -36,13 +36,12 @@ protected:
 public:
   static bool EnableLateStructurizeCFG;
   static bool EnableFunctionCalls;
-  static bool EnableFixedFunctionABI;
   static bool EnableLowerModuleLDS;
 
   AMDGPUTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                       StringRef FS, TargetOptions Options,
-                      Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
-                      CodeGenOpt::Level OL);
+                      std::optional<Reloc::Model> RM,
+                      std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL);
   ~AMDGPUTargetMachine() override;
 
   const TargetSubtargetInfo *getSubtargetImpl() const;
@@ -51,8 +50,6 @@ public:
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
-
-  void adjustPassManager(PassManagerBuilder &) override;
 
   void registerPassBuilderCallbacks(PassBuilder &PB) override;
   void registerDefaultAliasAnalyses(AAManager &) override;
@@ -63,6 +60,11 @@ public:
   bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
 
   unsigned getAssumedAddrSpace(const Value *V) const override;
+
+  std::pair<const Value *, unsigned>
+  getPredicatedAddrSpace(const Value *V) const override;
+
+  unsigned getAddressSpaceForPseudoSourceKind(unsigned Kind) const override;
 };
 
 //===----------------------------------------------------------------------===//
@@ -76,18 +78,23 @@ private:
 public:
   GCNTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                    StringRef FS, TargetOptions Options,
-                   Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
-                   CodeGenOpt::Level OL, bool JIT);
+                   std::optional<Reloc::Model> RM,
+                   std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
+                   bool JIT);
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
 
   const TargetSubtargetInfo *getSubtargetImpl(const Function &) const override;
 
-  TargetTransformInfo getTargetTransformInfo(const Function &F) override;
+  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
 
   bool useIPRA() const override {
     return true;
   }
+
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
 
   yaml::MachineFunctionInfo *createDefaultFuncInfoYAML() const override;
   yaml::MachineFunctionInfo *

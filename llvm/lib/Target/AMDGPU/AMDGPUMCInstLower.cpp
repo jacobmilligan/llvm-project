@@ -14,6 +14,7 @@
 
 #include "AMDGPUMCInstLower.h"
 #include "AMDGPUAsmPrinter.h"
+#include "AMDGPUMachineFunction.h"
 #include "AMDGPUTargetMachine.h"
 #include "MCTargetDesc/AMDGPUInstPrinter.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
@@ -165,12 +166,27 @@ bool AMDGPUAsmPrinter::lowerOperand(const MachineOperand &MO,
 }
 
 const MCExpr *AMDGPUAsmPrinter::lowerConstant(const Constant *CV) {
+
+  // Intercept LDS variables with known addresses
+  if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(CV)) {
+    if (AMDGPUMachineFunction::isKnownAddressLDSGlobal(*GV)) {
+      unsigned offset =
+          AMDGPUMachineFunction::calculateKnownAddressOfLDSGlobal(*GV);
+      Constant *C = ConstantInt::get(CV->getContext(), APInt(32, offset));
+      return AsmPrinter::lowerConstant(C);
+    }
+  }
+
   if (const MCExpr *E = lowerAddrSpaceCast(TM, CV, OutContext))
     return E;
   return AsmPrinter::lowerConstant(CV);
 }
 
 void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  // FIXME: Enable feature predicate checks once all the test pass.
+  // AMDGPU_MC::verifyInstructionPredicates(MI->getOpcode(),
+  //                                        getSubtargetInfo().getFeatureBits());
+
   if (emitPseudoExpansionLowering(*OutStreamer, MI))
     return;
 
@@ -207,6 +223,39 @@ void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
       return;
     }
 
+    if (MI->getOpcode() == AMDGPU::SCHED_BARRIER) {
+      if (isVerbose()) {
+        std::string HexString;
+        raw_string_ostream HexStream(HexString);
+        HexStream << format_hex(MI->getOperand(0).getImm(), 10, true);
+        OutStreamer->emitRawComment(" sched_barrier mask(" + HexString + ")");
+      }
+      return;
+    }
+
+    if (MI->getOpcode() == AMDGPU::SCHED_GROUP_BARRIER) {
+      if (isVerbose()) {
+        std::string HexString;
+        raw_string_ostream HexStream(HexString);
+        HexStream << format_hex(MI->getOperand(0).getImm(), 10, true);
+        OutStreamer->emitRawComment(
+            " sched_group_barrier mask(" + HexString + ") size(" +
+            Twine(MI->getOperand(1).getImm()) + ") SyncID(" +
+            Twine(MI->getOperand(2).getImm()) + ")");
+      }
+      return;
+    }
+
+    if (MI->getOpcode() == AMDGPU::IGLP_OPT) {
+      if (isVerbose()) {
+        std::string HexString;
+        raw_string_ostream HexStream(HexString);
+        HexStream << format_hex(MI->getOperand(0).getImm(), 10, true);
+        OutStreamer->emitRawComment(" iglp_opt mask(" + HexString + ")");
+      }
+      return;
+    }
+
     if (MI->getOpcode() == AMDGPU::SI_MASKED_UNREACHABLE) {
       if (isVerbose())
         OutStreamer->emitRawComment(" divergent unreachable");
@@ -224,7 +273,7 @@ void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
     EmitToStreamer(*OutStreamer, TmpInst);
 
 #ifdef EXPENSIVE_CHECKS
-    // Sanity-check getInstSizeInBytes on explicitly specified CPUs (it cannot
+    // Check getInstSizeInBytes on explicitly specified CPUs (it cannot
     // work correctly for the generic CPU).
     //
     // The isPseudo check really shouldn't be here, but unfortunately there are
@@ -239,7 +288,7 @@ void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
       raw_svector_ostream CodeStream(CodeBytes);
 
       std::unique_ptr<MCCodeEmitter> InstEmitter(createSIMCCodeEmitter(
-          *STI.getInstrInfo(), *OutContext.getRegisterInfo(), OutContext));
+          *STI.getInstrInfo(), OutContext));
       InstEmitter->encodeInstruction(TmpInst, CodeStream, Fixups, STI);
 
       assert(CodeBytes.size() == STI.getInstrInfo()->getInstSizeInBytes(*MI));

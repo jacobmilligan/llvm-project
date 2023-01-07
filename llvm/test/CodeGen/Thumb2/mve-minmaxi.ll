@@ -84,7 +84,7 @@ define arm_aapcs_vfpcc <16 x i8> @smax16i8(<16 x i8> %a, <16 x i8> %b) {
 
 declare <32 x i8> @llvm.smax.v32i8(<32 x i8> %a, <32 x i8> %b) readnone
 
-define arm_aapcs_vfpcc void @smax32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p) {
+define arm_aapcs_vfpcc void @smax32i8(<32 x i8> %a, <32 x i8> %b, ptr %p) {
 ; CHECK-LABEL: smax32i8:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.s8 q1, q1, q3
@@ -93,7 +93,7 @@ define arm_aapcs_vfpcc void @smax32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <32 x i8> @llvm.smax.v32i8(<32 x i8> %a, <32 x i8> %b)
-  store <32 x i8> %c, <32 x i8>* %p
+  store <32 x i8> %c, ptr %p
   ret void
 }
 
@@ -123,7 +123,7 @@ define arm_aapcs_vfpcc <8 x i16> @smax8i16(<8 x i16> %a, <8 x i16> %b) {
 
 declare <16 x i16> @llvm.smax.v16i16(<16 x i16> %a, <16 x i16> %b) readnone
 
-define arm_aapcs_vfpcc void @smax16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>* %p) {
+define arm_aapcs_vfpcc void @smax16i16(<16 x i16> %a, <16 x i16> %b, ptr %p) {
 ; CHECK-LABEL: smax16i16:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.s16 q1, q1, q3
@@ -132,7 +132,7 @@ define arm_aapcs_vfpcc void @smax16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>*
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <16 x i16> @llvm.smax.v16i16(<16 x i16> %a, <16 x i16> %b)
-  store <16 x i16> %c, <16 x i16>* %p
+  store <16 x i16> %c, ptr %p
   ret void
 }
 
@@ -141,45 +141,32 @@ declare <2 x i32> @llvm.smax.v2i32(<2 x i32> %a, <2 x i32> %b) readnone
 define arm_aapcs_vfpcc <2 x i32> @smax2i32(<2 x i32> %a, <2 x i32> %b) {
 ; CHECK-LABEL: smax2i32:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, r8, r9, lr}
-; CHECK-NEXT:    push.w {r4, r5, r6, r7, r8, r9, lr}
-; CHECK-NEXT:    vmov r0, s2
-; CHECK-NEXT:    vmov r1, s6
-; CHECK-NEXT:    vmov r2, s0
-; CHECK-NEXT:    asr.w r9, r0, #31
-; CHECK-NEXT:    cmp.w r9, r1, asr #31
-; CHECK-NEXT:    cset r3, gt
-; CHECK-NEXT:    asrs r5, r2, #31
-; CHECK-NEXT:    cmp r3, #0
-; CHECK-NEXT:    asr.w r3, r1, #31
-; CHECK-NEXT:    csel r12, r0, r1, ne
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel lr, r0, r1, hi
-; CHECK-NEXT:    cmp r9, r3
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    vmov r4, s4
-; CHECK-NEXT:    csel r12, lr, r12, ne
-; CHECK-NEXT:    cmp.w r5, r4, asr #31
-; CHECK-NEXT:    cset r6, gt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    asr.w r6, r4, #31
-; CHECK-NEXT:    csel lr, r2, r4, ne
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    csel r8, r2, r4, hi
-; CHECK-NEXT:    cmp r5, r6
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r7, r8, lr, ne
-; CHECK-NEXT:    cmp.w r9, r1, asr #31
-; CHECK-NEXT:    vmov q0[2], q0[0], r7, r12
-; CHECK-NEXT:    it gt
-; CHECK-NEXT:    asrgt r3, r0, #31
-; CHECK-NEXT:    cmp.w r5, r4, asr #31
-; CHECK-NEXT:    it gt
-; CHECK-NEXT:    asrgt r6, r2, #31
-; CHECK-NEXT:    vmov q0[3], q0[1], r6, r3
-; CHECK-NEXT:    pop.w {r4, r5, r6, r7, r8, r9, pc}
+; CHECK-NEXT:    .save {r4, r5, r7, lr}
+; CHECK-NEXT:    push {r4, r5, r7, lr}
+; CHECK-NEXT:    vmov r1, s4
+; CHECK-NEXT:    vmov r3, s0
+; CHECK-NEXT:    vmov r0, s6
+; CHECK-NEXT:    vmov r2, s2
+; CHECK-NEXT:    vmov q1[2], q1[0], r1, r0
+; CHECK-NEXT:    vmov q0[2], q0[0], r3, r2
+; CHECK-NEXT:    asr.w lr, r1, #31
+; CHECK-NEXT:    subs r1, r1, r3
+; CHECK-NEXT:    sbcs.w r1, lr, r3, asr #31
+; CHECK-NEXT:    asr.w r5, r3, #31
+; CHECK-NEXT:    asr.w r12, r0, #31
+; CHECK-NEXT:    csetm r1, lt
+; CHECK-NEXT:    subs r0, r0, r2
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    sbcs.w r0, r12, r2, asr #31
+; CHECK-NEXT:    bfi r3, r1, #0, #8
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    asrs r4, r2, #31
+; CHECK-NEXT:    bfi r3, r0, #8, #8
+; CHECK-NEXT:    vmov q1[3], q1[1], lr, r12
+; CHECK-NEXT:    vmov q0[3], q0[1], r5, r4
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    pop {r4, r5, r7, pc}
   %c = call <2 x i32> @llvm.smax.v2i32(<2 x i32> %a, <2 x i32> %b)
   ret <2 x i32> %c
 }
@@ -197,7 +184,7 @@ define arm_aapcs_vfpcc <4 x i32> @smax4i32(<4 x i32> %a, <4 x i32> %b) {
 
 declare <8 x i32> @llvm.smax.v8i32(<8 x i32> %a, <8 x i32> %b) readnone
 
-define arm_aapcs_vfpcc void @smax8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p) {
+define arm_aapcs_vfpcc void @smax8i32(<8 x i32> %a, <8 x i32> %b, ptr %p) {
 ; CHECK-LABEL: smax8i32:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.s32 q1, q1, q3
@@ -206,7 +193,7 @@ define arm_aapcs_vfpcc void @smax8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <8 x i32>@llvm.smax.v8i32(<8 x i32> %a, <8 x i32> %b)
-  store <8 x i32> %c, <8 x i32>* %p
+  store <8 x i32> %c, ptr %p
   ret void
 }
 
@@ -237,115 +224,68 @@ declare <2 x i64> @llvm.smax.v2i64(<2 x i64> %a, <2 x i64> %b) readnone
 define arm_aapcs_vfpcc <2 x i64> @smax2i64(<2 x i64> %a, <2 x i64> %b) {
 ; CHECK-LABEL: smax2i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, lr}
-; CHECK-NEXT:    push {r4, r5, r6, lr}
-; CHECK-NEXT:    vmov r1, r12, d3
-; CHECK-NEXT:    vmov r2, r3, d1
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, gt
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r2, r1, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, eq
-; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    csel r1, r2, r1, hi
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r1, lr, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r0, r4, d0
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r5, gt
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r5, r0, r1, ne
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r6, eq
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel r0, r0, r1, hi
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r0, r0, r5, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    vmov q0[2], q0[0], r0, lr
-; CHECK-NEXT:    csel r0, r3, r12, gt
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r1, r4, r2, gt
-; CHECK-NEXT:    vmov q0[3], q0[1], r1, r0
-; CHECK-NEXT:    pop {r4, r5, r6, pc}
+; CHECK-NEXT:    vmov r0, r1, d0
+; CHECK-NEXT:    vmov r2, r3, d2
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    vmov r3, r2, d3
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d1
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i64> @llvm.smax.v2i64(<2 x i64> %a, <2 x i64> %b)
   ret <2 x i64> %c
 }
 
 declare <4 x i64> @llvm.smax.v4i64(<4 x i64> %a, <4 x i64> %b) readnone
 
-define arm_aapcs_vfpcc void @smax4i64(<4 x i64> %a, <4 x i64> %b, <4 x i64>* %p) {
+define arm_aapcs_vfpcc void @smax4i64(<4 x i64> %a, <4 x i64> %b, ptr %p) {
 ; CHECK-LABEL: smax4i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    push {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    vmov r2, r12, d7
-; CHECK-NEXT:    vmov r3, lr, d3
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r1, gt
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel r1, r3, r2, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, hi
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r1, r2, r1, ne
-; CHECK-NEXT:    vmov r2, r3, d6
-; CHECK-NEXT:    vmov r4, r5, d2
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r6, gt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r4, r2, ne
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r2, r4, r2, hi
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r2, r2, r6, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    vmov q1[2], q1[0], r2, r1
-; CHECK-NEXT:    csel r1, lr, r12, gt
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r2, r5, r3, gt
-; CHECK-NEXT:    vmov r3, r7, d1
-; CHECK-NEXT:    vmov q1[3], q1[1], r2, r1
-; CHECK-NEXT:    vmov r2, r1, d5
+; CHECK-NEXT:    .save {r4, lr}
+; CHECK-NEXT:    push {r4, lr}
+; CHECK-NEXT:    vmov r1, r12, d2
+; CHECK-NEXT:    vmov r3, r2, d6
+; CHECK-NEXT:    subs r1, r3, r1
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    sbcs.w r1, r2, r12
+; CHECK-NEXT:    vmov lr, r12, d3
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    movs r1, #0
+; CHECK-NEXT:    bfi r3, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r4, d7
+; CHECK-NEXT:    subs.w r2, r2, lr
+; CHECK-NEXT:    sbcs.w r2, r4, r12
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r3, r2, #8, #8
+; CHECK-NEXT:    vmov r2, r12, d0
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vmov r4, r3, d4
+; CHECK-NEXT:    vpsel q1, q1, q3
 ; CHECK-NEXT:    vstrw.32 q1, [r0, #16]
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r6, gt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r3, r2, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r5, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, hi
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r12, r2, r6, ne
-; CHECK-NEXT:    vmov r3, r6, d4
-; CHECK-NEXT:    vmov r5, r4, d0
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, gt
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel lr, r5, r3, ne
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r3, r5, r3, hi
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r2, r3, lr, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    csel r1, r7, r1, gt
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    vmov q0[2], q0[0], r2, r12
-; CHECK-NEXT:    csel r2, r4, r6, gt
-; CHECK-NEXT:    vmov q0[3], q0[1], r2, r1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    vmov r4, r3, d5
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r1, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r12, d1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r1, r2, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q2
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
-; CHECK-NEXT:    pop {r4, r5, r6, r7, pc}
+; CHECK-NEXT:    pop {r4, pc}
   %c = call <4 x i64> @llvm.smax.v4i64(<4 x i64> %a, <4 x i64> %b)
-  store <4 x i64> %c, <4 x i64>* %p
+  store <4 x i64> %c, ptr %p
   ret void
 }
 
@@ -432,7 +372,7 @@ define arm_aapcs_vfpcc <16 x i8> @umax16i8(<16 x i8> %a, <16 x i8> %b) {
 
 declare <32 x i8> @llvm.umax.v32i8(<32 x i8> %a, <32 x i8> %b) readnone
 
-define arm_aapcs_vfpcc void @umax32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p) {
+define arm_aapcs_vfpcc void @umax32i8(<32 x i8> %a, <32 x i8> %b, ptr %p) {
 ; CHECK-LABEL: umax32i8:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.u8 q1, q1, q3
@@ -441,7 +381,7 @@ define arm_aapcs_vfpcc void @umax32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <32 x i8> @llvm.umax.v32i8(<32 x i8> %a, <32 x i8> %b)
-  store <32 x i8> %c, <32 x i8>* %p
+  store <32 x i8> %c, ptr %p
   ret void
 }
 
@@ -471,7 +411,7 @@ define arm_aapcs_vfpcc <8 x i16> @umax8i16(<8 x i16> %a, <8 x i16> %b) {
 
 declare <16 x i16> @llvm.umax.v16i16(<16 x i16> %a, <16 x i16> %b) readnone
 
-define arm_aapcs_vfpcc void @umax16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>* %p) {
+define arm_aapcs_vfpcc void @umax16i16(<16 x i16> %a, <16 x i16> %b, ptr %p) {
 ; CHECK-LABEL: umax16i16:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.u16 q1, q1, q3
@@ -480,7 +420,7 @@ define arm_aapcs_vfpcc void @umax16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>*
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <16 x i16> @llvm.umax.v16i16(<16 x i16> %a, <16 x i16> %b)
-  store <16 x i16> %c, <16 x i16>* %p
+  store <16 x i16> %c, ptr %p
   ret void
 }
 
@@ -489,38 +429,25 @@ declare <2 x i32> @llvm.umax.v2i32(<2 x i32> %a, <2 x i32> %b) readnone
 define arm_aapcs_vfpcc <2 x i32> @umax2i32(<2 x i32> %a, <2 x i32> %b) {
 ; CHECK-LABEL: umax2i32:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, lr}
-; CHECK-NEXT:    push {r4, lr}
 ; CHECK-NEXT:    vmov.i64 q2, #0xffffffff
-; CHECK-NEXT:    vand q1, q1, q2
 ; CHECK-NEXT:    vand q0, q0, q2
-; CHECK-NEXT:    vmov r0, r1, d3
-; CHECK-NEXT:    vmov r2, r12, d1
-; CHECK-NEXT:    cmp r12, r1
-; CHECK-NEXT:    cset r3, hi
-; CHECK-NEXT:    cmp r3, #0
-; CHECK-NEXT:    csel r3, r2, r0, ne
-; CHECK-NEXT:    cmp r12, r1
-; CHECK-NEXT:    cset r1, eq
-; CHECK-NEXT:    cmp r2, r0
-; CHECK-NEXT:    csel r0, r2, r0, hi
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel lr, r0, r3, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r3, r0, d0
-; CHECK-NEXT:    cmp r0, r2
-; CHECK-NEXT:    cset r4, hi
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r4, r3, r1, ne
-; CHECK-NEXT:    cmp r0, r2
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    csel r1, r3, r1, hi
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r1, r1, r4, ne
-; CHECK-NEXT:    vmov q0[2], q0[0], r1, lr
-; CHECK-NEXT:    vmov q0[3], q0[1], r0, r12
-; CHECK-NEXT:    pop {r4, pc}
+; CHECK-NEXT:    vand q1, q1, q2
+; CHECK-NEXT:    vmov r0, r1, d0
+; CHECK-NEXT:    vmov r2, r3, d2
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    vmov r3, r2, d3
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d1
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i32> @llvm.umax.v2i32(<2 x i32> %a, <2 x i32> %b)
   ret <2 x i32> %c
 }
@@ -538,7 +465,7 @@ define arm_aapcs_vfpcc <4 x i32> @umax4i32(<4 x i32> %a, <4 x i32> %b) {
 
 declare <8 x i32> @llvm.umax.v8i32(<8 x i32> %a, <8 x i32> %b) readnone
 
-define arm_aapcs_vfpcc void @umax8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p) {
+define arm_aapcs_vfpcc void @umax8i32(<8 x i32> %a, <8 x i32> %b, ptr %p) {
 ; CHECK-LABEL: umax8i32:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmax.u32 q1, q1, q3
@@ -547,7 +474,7 @@ define arm_aapcs_vfpcc void @umax8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <8 x i32>@llvm.umax.v8i32(<8 x i32> %a, <8 x i32> %b)
-  store <8 x i32> %c, <8 x i32>* %p
+  store <8 x i32> %c, ptr %p
   ret void
 }
 
@@ -578,115 +505,68 @@ declare <2 x i64> @llvm.umax.v2i64(<2 x i64> %a, <2 x i64> %b) readnone
 define arm_aapcs_vfpcc <2 x i64> @umax2i64(<2 x i64> %a, <2 x i64> %b) {
 ; CHECK-LABEL: umax2i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, lr}
-; CHECK-NEXT:    push {r4, r5, r6, lr}
-; CHECK-NEXT:    vmov r1, r12, d3
-; CHECK-NEXT:    vmov r2, r3, d1
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, hi
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r2, r1, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, eq
-; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    csel r1, r2, r1, hi
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r1, lr, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r0, r4, d0
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r5, hi
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r5, r0, r1, ne
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r6, eq
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel r0, r0, r1, hi
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r0, r0, r5, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    vmov q0[2], q0[0], r0, lr
-; CHECK-NEXT:    csel r0, r3, r12, hi
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r1, r4, r2, hi
-; CHECK-NEXT:    vmov q0[3], q0[1], r1, r0
-; CHECK-NEXT:    pop {r4, r5, r6, pc}
+; CHECK-NEXT:    vmov r0, r1, d0
+; CHECK-NEXT:    vmov r2, r3, d2
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    vmov r3, r2, d3
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d1
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i64> @llvm.umax.v2i64(<2 x i64> %a, <2 x i64> %b)
   ret <2 x i64> %c
 }
 
 declare <4 x i64> @llvm.umax.v4i64(<4 x i64> %a, <4 x i64> %b) readnone
 
-define arm_aapcs_vfpcc void @umax4i64(<4 x i64> %a, <4 x i64> %b, <4 x i64>* %p) {
+define arm_aapcs_vfpcc void @umax4i64(<4 x i64> %a, <4 x i64> %b, ptr %p) {
 ; CHECK-LABEL: umax4i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    push {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    vmov r2, r12, d7
-; CHECK-NEXT:    vmov r3, lr, d3
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r1, hi
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel r1, r3, r2, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, hi
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r1, r2, r1, ne
-; CHECK-NEXT:    vmov r2, r3, d6
-; CHECK-NEXT:    vmov r4, r5, d2
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r6, hi
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r4, r2, ne
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r2, r4, r2, hi
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r2, r2, r6, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    vmov q1[2], q1[0], r2, r1
-; CHECK-NEXT:    csel r1, lr, r12, hi
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r2, r5, r3, hi
-; CHECK-NEXT:    vmov r3, r7, d1
-; CHECK-NEXT:    vmov q1[3], q1[1], r2, r1
-; CHECK-NEXT:    vmov r2, r1, d5
+; CHECK-NEXT:    .save {r4, lr}
+; CHECK-NEXT:    push {r4, lr}
+; CHECK-NEXT:    vmov r1, r12, d2
+; CHECK-NEXT:    vmov r3, r2, d6
+; CHECK-NEXT:    subs r1, r3, r1
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    sbcs.w r1, r2, r12
+; CHECK-NEXT:    vmov lr, r12, d3
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    movs r1, #0
+; CHECK-NEXT:    bfi r3, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r4, d7
+; CHECK-NEXT:    subs.w r2, r2, lr
+; CHECK-NEXT:    sbcs.w r2, r4, r12
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r3, r2, #8, #8
+; CHECK-NEXT:    vmov r2, r12, d0
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vmov r4, r3, d4
+; CHECK-NEXT:    vpsel q1, q1, q3
 ; CHECK-NEXT:    vstrw.32 q1, [r0, #16]
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r6, hi
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r3, r2, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r5, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, hi
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r12, r2, r6, ne
-; CHECK-NEXT:    vmov r3, r6, d4
-; CHECK-NEXT:    vmov r5, r4, d0
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, hi
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel lr, r5, r3, ne
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r3, r5, r3, hi
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r2, r3, lr, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    csel r1, r7, r1, hi
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    vmov q0[2], q0[0], r2, r12
-; CHECK-NEXT:    csel r2, r4, r6, hi
-; CHECK-NEXT:    vmov q0[3], q0[1], r2, r1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    vmov r4, r3, d5
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r1, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r12, d1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r1, r2, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q2
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
-; CHECK-NEXT:    pop {r4, r5, r6, r7, pc}
+; CHECK-NEXT:    pop {r4, pc}
   %c = call <4 x i64> @llvm.umax.v4i64(<4 x i64> %a, <4 x i64> %b)
-  store <4 x i64> %c, <4 x i64>* %p
+  store <4 x i64> %c, ptr %p
   ret void
 }
 
@@ -773,7 +653,7 @@ define arm_aapcs_vfpcc <16 x i8> @smin16i8(<16 x i8> %a, <16 x i8> %b) {
 
 declare <32 x i8> @llvm.smin.v32i8(<32 x i8> %a, <32 x i8> %b) readnone
 
-define arm_aapcs_vfpcc void @smin32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p) {
+define arm_aapcs_vfpcc void @smin32i8(<32 x i8> %a, <32 x i8> %b, ptr %p) {
 ; CHECK-LABEL: smin32i8:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.s8 q1, q1, q3
@@ -782,7 +662,7 @@ define arm_aapcs_vfpcc void @smin32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <32 x i8> @llvm.smin.v32i8(<32 x i8> %a, <32 x i8> %b)
-  store <32 x i8> %c, <32 x i8>* %p
+  store <32 x i8> %c, ptr %p
   ret void
 }
 
@@ -812,7 +692,7 @@ define arm_aapcs_vfpcc <8 x i16> @smin8i16(<8 x i16> %a, <8 x i16> %b) {
 
 declare <16 x i16> @llvm.smin.v16i16(<16 x i16> %a, <16 x i16> %b) readnone
 
-define arm_aapcs_vfpcc void @smin16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>* %p) {
+define arm_aapcs_vfpcc void @smin16i16(<16 x i16> %a, <16 x i16> %b, ptr %p) {
 ; CHECK-LABEL: smin16i16:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.s16 q1, q1, q3
@@ -821,7 +701,7 @@ define arm_aapcs_vfpcc void @smin16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>*
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <16 x i16> @llvm.smin.v16i16(<16 x i16> %a, <16 x i16> %b)
-  store <16 x i16> %c, <16 x i16>* %p
+  store <16 x i16> %c, ptr %p
   ret void
 }
 
@@ -830,45 +710,32 @@ declare <2 x i32> @llvm.smin.v2i32(<2 x i32> %a, <2 x i32> %b) readnone
 define arm_aapcs_vfpcc <2 x i32> @smin2i32(<2 x i32> %a, <2 x i32> %b) {
 ; CHECK-LABEL: smin2i32:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, r8, r9, lr}
-; CHECK-NEXT:    push.w {r4, r5, r6, r7, r8, r9, lr}
-; CHECK-NEXT:    vmov r0, s2
-; CHECK-NEXT:    vmov r1, s6
-; CHECK-NEXT:    vmov r2, s0
-; CHECK-NEXT:    asr.w r9, r0, #31
-; CHECK-NEXT:    cmp.w r9, r1, asr #31
-; CHECK-NEXT:    cset r3, lt
-; CHECK-NEXT:    asrs r5, r2, #31
-; CHECK-NEXT:    cmp r3, #0
-; CHECK-NEXT:    asr.w r3, r1, #31
-; CHECK-NEXT:    csel r12, r0, r1, ne
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel lr, r0, r1, lo
-; CHECK-NEXT:    cmp r9, r3
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    vmov r4, s4
-; CHECK-NEXT:    csel r12, lr, r12, ne
-; CHECK-NEXT:    cmp.w r5, r4, asr #31
-; CHECK-NEXT:    cset r6, lt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    asr.w r6, r4, #31
-; CHECK-NEXT:    csel lr, r2, r4, ne
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    csel r8, r2, r4, lo
-; CHECK-NEXT:    cmp r5, r6
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r7, r8, lr, ne
-; CHECK-NEXT:    cmp.w r9, r1, asr #31
-; CHECK-NEXT:    vmov q0[2], q0[0], r7, r12
-; CHECK-NEXT:    it lt
-; CHECK-NEXT:    asrlt r3, r0, #31
-; CHECK-NEXT:    cmp.w r5, r4, asr #31
-; CHECK-NEXT:    it lt
-; CHECK-NEXT:    asrlt r6, r2, #31
-; CHECK-NEXT:    vmov q0[3], q0[1], r6, r3
-; CHECK-NEXT:    pop.w {r4, r5, r6, r7, r8, r9, pc}
+; CHECK-NEXT:    .save {r7, lr}
+; CHECK-NEXT:    push {r7, lr}
+; CHECK-NEXT:    vmov r0, s6
+; CHECK-NEXT:    vmov r1, s4
+; CHECK-NEXT:    vmov q1[2], q1[0], r1, r0
+; CHECK-NEXT:    asrs r2, r0, #31
+; CHECK-NEXT:    asrs r3, r1, #31
+; CHECK-NEXT:    vmov q1[3], q1[1], r3, r2
+; CHECK-NEXT:    vmov r3, s0
+; CHECK-NEXT:    vmov r2, s2
+; CHECK-NEXT:    vmov q0[2], q0[0], r3, r2
+; CHECK-NEXT:    asr.w lr, r3, #31
+; CHECK-NEXT:    subs r3, r3, r1
+; CHECK-NEXT:    sbcs.w r1, lr, r1, asr #31
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    csetm r1, lt
+; CHECK-NEXT:    asr.w r12, r2, #31
+; CHECK-NEXT:    bfi r3, r1, #0, #8
+; CHECK-NEXT:    subs r1, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r12, r0, asr #31
+; CHECK-NEXT:    vmov q0[3], q0[1], lr, r12
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    bfi r3, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    pop {r7, pc}
   %c = call <2 x i32> @llvm.smin.v2i32(<2 x i32> %a, <2 x i32> %b)
   ret <2 x i32> %c
 }
@@ -886,7 +753,7 @@ define arm_aapcs_vfpcc <4 x i32> @smin4i32(<4 x i32> %a, <4 x i32> %b) {
 
 declare <8 x i32> @llvm.smin.v8i32(<8 x i32> %a, <8 x i32> %b) readnone
 
-define arm_aapcs_vfpcc void @smin8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p) {
+define arm_aapcs_vfpcc void @smin8i32(<8 x i32> %a, <8 x i32> %b, ptr %p) {
 ; CHECK-LABEL: smin8i32:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.s32 q1, q1, q3
@@ -895,7 +762,7 @@ define arm_aapcs_vfpcc void @smin8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <8 x i32>@llvm.smin.v8i32(<8 x i32> %a, <8 x i32> %b)
-  store <8 x i32> %c, <8 x i32>* %p
+  store <8 x i32> %c, ptr %p
   ret void
 }
 
@@ -926,115 +793,68 @@ declare <2 x i64> @llvm.smin.v2i64(<2 x i64> %a, <2 x i64> %b) readnone
 define arm_aapcs_vfpcc <2 x i64> @smin2i64(<2 x i64> %a, <2 x i64> %b) {
 ; CHECK-LABEL: smin2i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, lr}
-; CHECK-NEXT:    push {r4, r5, r6, lr}
-; CHECK-NEXT:    vmov r1, r12, d3
-; CHECK-NEXT:    vmov r2, r3, d1
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, lt
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r2, r1, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, eq
-; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    csel r1, r2, r1, lo
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r1, lr, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r0, r4, d0
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r5, lt
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r5, r0, r1, ne
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r6, eq
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel r0, r0, r1, lo
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r0, r0, r5, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    vmov q0[2], q0[0], r0, lr
-; CHECK-NEXT:    csel r0, r3, r12, lt
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r1, r4, r2, lt
-; CHECK-NEXT:    vmov q0[3], q0[1], r1, r0
-; CHECK-NEXT:    pop {r4, r5, r6, pc}
+; CHECK-NEXT:    vmov r0, r1, d2
+; CHECK-NEXT:    vmov r2, r3, d0
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    vmov r3, r2, d1
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d3
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i64> @llvm.smin.v2i64(<2 x i64> %a, <2 x i64> %b)
   ret <2 x i64> %c
 }
 
 declare <4 x i64> @llvm.smin.v4i64(<4 x i64> %a, <4 x i64> %b) readnone
 
-define arm_aapcs_vfpcc void @smin4i64(<4 x i64> %a, <4 x i64> %b, <4 x i64>* %p) {
+define arm_aapcs_vfpcc void @smin4i64(<4 x i64> %a, <4 x i64> %b, ptr %p) {
 ; CHECK-LABEL: smin4i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    push {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    vmov r2, r12, d7
-; CHECK-NEXT:    vmov r3, lr, d3
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r1, lt
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel r1, r3, r2, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, lo
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r1, r2, r1, ne
-; CHECK-NEXT:    vmov r2, r3, d6
-; CHECK-NEXT:    vmov r4, r5, d2
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r6, lt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r4, r2, ne
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r2, r4, r2, lo
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r2, r2, r6, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    vmov q1[2], q1[0], r2, r1
-; CHECK-NEXT:    csel r1, lr, r12, lt
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r2, r5, r3, lt
-; CHECK-NEXT:    vmov r3, r7, d1
-; CHECK-NEXT:    vmov q1[3], q1[1], r2, r1
-; CHECK-NEXT:    vmov r2, r1, d5
+; CHECK-NEXT:    .save {r4, lr}
+; CHECK-NEXT:    push {r4, lr}
+; CHECK-NEXT:    vmov r1, r12, d6
+; CHECK-NEXT:    vmov r3, r2, d2
+; CHECK-NEXT:    subs r1, r3, r1
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    sbcs.w r1, r2, r12
+; CHECK-NEXT:    vmov lr, r12, d7
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    movs r1, #0
+; CHECK-NEXT:    bfi r3, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r4, d3
+; CHECK-NEXT:    subs.w r2, r2, lr
+; CHECK-NEXT:    sbcs.w r2, r4, r12
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r3, r2, #8, #8
+; CHECK-NEXT:    vmov r2, r12, d4
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vmov r4, r3, d0
+; CHECK-NEXT:    vpsel q1, q1, q3
 ; CHECK-NEXT:    vstrw.32 q1, [r0, #16]
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r6, lt
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r3, r2, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r5, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, lo
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r12, r2, r6, ne
-; CHECK-NEXT:    vmov r3, r6, d4
-; CHECK-NEXT:    vmov r5, r4, d0
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, lt
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel lr, r5, r3, ne
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r3, r5, r3, lo
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r2, r3, lr, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    csel r1, r7, r1, lt
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    vmov q0[2], q0[0], r2, r12
-; CHECK-NEXT:    csel r2, r4, r6, lt
-; CHECK-NEXT:    vmov q0[3], q0[1], r2, r1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    vmov r4, r3, d1
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r1, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r12, d5
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    csetm r2, lt
+; CHECK-NEXT:    bfi r1, r2, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q2
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
-; CHECK-NEXT:    pop {r4, r5, r6, r7, pc}
+; CHECK-NEXT:    pop {r4, pc}
   %c = call <4 x i64> @llvm.smin.v4i64(<4 x i64> %a, <4 x i64> %b)
-  store <4 x i64> %c, <4 x i64>* %p
+  store <4 x i64> %c, ptr %p
   ret void
 }
 
@@ -1121,7 +941,7 @@ define arm_aapcs_vfpcc <16 x i8> @umin16i8(<16 x i8> %a, <16 x i8> %b) {
 
 declare <32 x i8> @llvm.umin.v32i8(<32 x i8> %a, <32 x i8> %b) readnone
 
-define arm_aapcs_vfpcc void @umin32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p) {
+define arm_aapcs_vfpcc void @umin32i8(<32 x i8> %a, <32 x i8> %b, ptr %p) {
 ; CHECK-LABEL: umin32i8:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.u8 q1, q1, q3
@@ -1130,7 +950,7 @@ define arm_aapcs_vfpcc void @umin32i8(<32 x i8> %a, <32 x i8> %b, <32 x i8>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <32 x i8> @llvm.umin.v32i8(<32 x i8> %a, <32 x i8> %b)
-  store <32 x i8> %c, <32 x i8>* %p
+  store <32 x i8> %c, ptr %p
   ret void
 }
 
@@ -1160,7 +980,7 @@ define arm_aapcs_vfpcc <8 x i16> @umin8i16(<8 x i16> %a, <8 x i16> %b) {
 
 declare <16 x i16> @llvm.umin.v16i16(<16 x i16> %a, <16 x i16> %b) readnone
 
-define arm_aapcs_vfpcc void @umin16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>* %p) {
+define arm_aapcs_vfpcc void @umin16i16(<16 x i16> %a, <16 x i16> %b, ptr %p) {
 ; CHECK-LABEL: umin16i16:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.u16 q1, q1, q3
@@ -1169,7 +989,7 @@ define arm_aapcs_vfpcc void @umin16i16(<16 x i16> %a, <16 x i16> %b, <16 x i16>*
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <16 x i16> @llvm.umin.v16i16(<16 x i16> %a, <16 x i16> %b)
-  store <16 x i16> %c, <16 x i16>* %p
+  store <16 x i16> %c, ptr %p
   ret void
 }
 
@@ -1178,38 +998,25 @@ declare <2 x i32> @llvm.umin.v2i32(<2 x i32> %a, <2 x i32> %b) readnone
 define arm_aapcs_vfpcc <2 x i32> @umin2i32(<2 x i32> %a, <2 x i32> %b) {
 ; CHECK-LABEL: umin2i32:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, lr}
-; CHECK-NEXT:    push {r4, lr}
 ; CHECK-NEXT:    vmov.i64 q2, #0xffffffff
 ; CHECK-NEXT:    vand q1, q1, q2
 ; CHECK-NEXT:    vand q0, q0, q2
-; CHECK-NEXT:    vmov r0, r1, d3
-; CHECK-NEXT:    vmov r2, r12, d1
-; CHECK-NEXT:    cmp r12, r1
-; CHECK-NEXT:    cset r3, lo
-; CHECK-NEXT:    cmp r3, #0
-; CHECK-NEXT:    csel r3, r2, r0, ne
-; CHECK-NEXT:    cmp r12, r1
-; CHECK-NEXT:    cset r1, eq
-; CHECK-NEXT:    cmp r2, r0
-; CHECK-NEXT:    csel r0, r2, r0, lo
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel lr, r0, r3, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r3, r0, d0
-; CHECK-NEXT:    cmp r0, r2
-; CHECK-NEXT:    cset r4, lo
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r4, r3, r1, ne
-; CHECK-NEXT:    cmp r0, r2
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    csel r1, r3, r1, lo
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r1, r1, r4, ne
-; CHECK-NEXT:    vmov q0[2], q0[0], r1, lr
-; CHECK-NEXT:    vmov q0[3], q0[1], r0, r12
-; CHECK-NEXT:    pop {r4, pc}
+; CHECK-NEXT:    vmov r0, r1, d2
+; CHECK-NEXT:    vmov r2, r3, d0
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    vmov r3, r2, d1
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d3
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i32> @llvm.umin.v2i32(<2 x i32> %a, <2 x i32> %b)
   ret <2 x i32> %c
 }
@@ -1227,7 +1034,7 @@ define arm_aapcs_vfpcc <4 x i32> @umin4i32(<4 x i32> %a, <4 x i32> %b) {
 
 declare <8 x i32> @llvm.umin.v8i32(<8 x i32> %a, <8 x i32> %b) readnone
 
-define arm_aapcs_vfpcc void @umin8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p) {
+define arm_aapcs_vfpcc void @umin8i32(<8 x i32> %a, <8 x i32> %b, ptr %p) {
 ; CHECK-LABEL: umin8i32:
 ; CHECK:       @ %bb.0:
 ; CHECK-NEXT:    vmin.u32 q1, q1, q3
@@ -1236,7 +1043,7 @@ define arm_aapcs_vfpcc void @umin8i32(<8 x i32> %a, <8 x i32> %b, <8 x i32>* %p)
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
 ; CHECK-NEXT:    bx lr
   %c = call <8 x i32>@llvm.umin.v8i32(<8 x i32> %a, <8 x i32> %b)
-  store <8 x i32> %c, <8 x i32>* %p
+  store <8 x i32> %c, ptr %p
   ret void
 }
 
@@ -1267,114 +1074,67 @@ declare <2 x i64> @llvm.umin.v2i64(<2 x i64> %a, <2 x i64> %b) readnone
 define arm_aapcs_vfpcc <2 x i64> @umin2i64(<2 x i64> %a, <2 x i64> %b) {
 ; CHECK-LABEL: umin2i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, lr}
-; CHECK-NEXT:    push {r4, r5, r6, lr}
-; CHECK-NEXT:    vmov r1, r12, d3
-; CHECK-NEXT:    vmov r2, r3, d1
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, lo
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r2, r1, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    cset r0, eq
-; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    csel r1, r2, r1, lo
-; CHECK-NEXT:    cmp r0, #0
-; CHECK-NEXT:    csel lr, r1, lr, ne
-; CHECK-NEXT:    vmov r1, r2, d2
-; CHECK-NEXT:    vmov r0, r4, d0
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r5, lo
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r5, r0, r1, ne
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    cset r6, eq
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    csel r0, r0, r1, lo
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r0, r0, r5, ne
-; CHECK-NEXT:    cmp r3, r12
-; CHECK-NEXT:    vmov q0[2], q0[0], r0, lr
-; CHECK-NEXT:    csel r0, r3, r12, lo
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r1, r4, r2, lo
-; CHECK-NEXT:    vmov q0[3], q0[1], r1, r0
-; CHECK-NEXT:    pop {r4, r5, r6, pc}
+; CHECK-NEXT:    vmov r0, r1, d2
+; CHECK-NEXT:    vmov r2, r3, d0
+; CHECK-NEXT:    subs r0, r2, r0
+; CHECK-NEXT:    sbcs.w r0, r3, r1
+; CHECK-NEXT:    mov.w r1, #0
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    vmov r3, r2, d1
+; CHECK-NEXT:    bfi r1, r0, #0, #8
+; CHECK-NEXT:    vmov r0, r12, d3
+; CHECK-NEXT:    subs r0, r3, r0
+; CHECK-NEXT:    sbcs.w r0, r2, r12
+; CHECK-NEXT:    csetm r0, lo
+; CHECK-NEXT:    bfi r1, r0, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q1
+; CHECK-NEXT:    bx lr
   %c = call <2 x i64> @llvm.umin.v2i64(<2 x i64> %a, <2 x i64> %b)
   ret <2 x i64> %c
 }
 
 declare <4 x i64> @llvm.umin.v4i64(<4 x i64> %a, <4 x i64> %b) readnone
 
-define arm_aapcs_vfpcc void @umin4i64(<4 x i64> %a, <4 x i64> %b, <4 x i64>* %p) {
+define arm_aapcs_vfpcc void @umin4i64(<4 x i64> %a, <4 x i64> %b, ptr %p) {
 ; CHECK-LABEL: umin4i64:
 ; CHECK:       @ %bb.0:
-; CHECK-NEXT:    .save {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    push {r4, r5, r6, r7, lr}
-; CHECK-NEXT:    vmov r2, r12, d7
-; CHECK-NEXT:    vmov r3, lr, d3
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r1, lo
-; CHECK-NEXT:    cmp r1, #0
-; CHECK-NEXT:    csel r1, r3, r2, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    cset r4, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, lo
-; CHECK-NEXT:    cmp r4, #0
-; CHECK-NEXT:    csel r1, r2, r1, ne
-; CHECK-NEXT:    vmov r2, r3, d6
-; CHECK-NEXT:    vmov r4, r5, d2
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r6, lo
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r4, r2, ne
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    cset r7, eq
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    csel r2, r4, r2, lo
-; CHECK-NEXT:    cmp r7, #0
-; CHECK-NEXT:    csel r2, r2, r6, ne
-; CHECK-NEXT:    cmp lr, r12
-; CHECK-NEXT:    vmov q1[2], q1[0], r2, r1
-; CHECK-NEXT:    csel r1, lr, r12, lo
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r2, r5, r3, lo
-; CHECK-NEXT:    vmov r3, r7, d1
-; CHECK-NEXT:    vmov q1[3], q1[1], r2, r1
-; CHECK-NEXT:    vmov r2, r1, d5
+; CHECK-NEXT:    .save {r4, lr}
+; CHECK-NEXT:    push {r4, lr}
+; CHECK-NEXT:    vmov r1, r12, d6
+; CHECK-NEXT:    vmov r3, r2, d2
+; CHECK-NEXT:    subs r1, r3, r1
+; CHECK-NEXT:    mov.w r3, #0
+; CHECK-NEXT:    sbcs.w r1, r2, r12
+; CHECK-NEXT:    vmov lr, r12, d7
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    movs r1, #0
+; CHECK-NEXT:    bfi r3, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r4, d3
+; CHECK-NEXT:    subs.w r2, r2, lr
+; CHECK-NEXT:    sbcs.w r2, r4, r12
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r3, r2, #8, #8
+; CHECK-NEXT:    vmov r2, r12, d4
+; CHECK-NEXT:    vmsr p0, r3
+; CHECK-NEXT:    vmov r4, r3, d0
+; CHECK-NEXT:    vpsel q1, q1, q3
 ; CHECK-NEXT:    vstrw.32 q1, [r0, #16]
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r6, lo
-; CHECK-NEXT:    cmp r6, #0
-; CHECK-NEXT:    csel r6, r3, r2, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    cset r5, eq
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    csel r2, r3, r2, lo
-; CHECK-NEXT:    cmp r5, #0
-; CHECK-NEXT:    csel r12, r2, r6, ne
-; CHECK-NEXT:    vmov r3, r6, d4
-; CHECK-NEXT:    vmov r5, r4, d0
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, lo
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel lr, r5, r3, ne
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    cset r2, eq
-; CHECK-NEXT:    cmp r5, r3
-; CHECK-NEXT:    csel r3, r5, r3, lo
-; CHECK-NEXT:    cmp r2, #0
-; CHECK-NEXT:    csel r2, r3, lr, ne
-; CHECK-NEXT:    cmp r7, r1
-; CHECK-NEXT:    csel r1, r7, r1, lo
-; CHECK-NEXT:    cmp r4, r6
-; CHECK-NEXT:    vmov q0[2], q0[0], r2, r12
-; CHECK-NEXT:    csel r2, r4, r6, lo
-; CHECK-NEXT:    vmov q0[3], q0[1], r2, r1
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    vmov r4, r3, d1
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r1, r2, #0, #8
+; CHECK-NEXT:    vmov r2, r12, d5
+; CHECK-NEXT:    subs r2, r4, r2
+; CHECK-NEXT:    sbcs.w r2, r3, r12
+; CHECK-NEXT:    csetm r2, lo
+; CHECK-NEXT:    bfi r1, r2, #8, #8
+; CHECK-NEXT:    vmsr p0, r1
+; CHECK-NEXT:    vpsel q0, q0, q2
 ; CHECK-NEXT:    vstrw.32 q0, [r0]
-; CHECK-NEXT:    pop {r4, r5, r6, r7, pc}
+; CHECK-NEXT:    pop {r4, pc}
   %c = call <4 x i64> @llvm.umin.v4i64(<4 x i64> %a, <4 x i64> %b)
-  store <4 x i64> %c, <4 x i64>* %p
+  store <4 x i64> %c, ptr %p
   ret void
 }

@@ -11,12 +11,14 @@
 
 // UNSUPPORTED: c++03, c++11, c++14
 
+// XFAIL: LIBCXX-AIX-FIXME
+
 // ::timespec_get is provided by the C library, but it's marked as
 // unavailable until macOS 10.15
 // XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11|12|13|14}}
 
-// MinGW lacks timespec_get.
-// XFAIL: target={{.+}}-windows-gnu
+// ::timespec_get is available starting with Android Q (API 29)
+// XFAIL: target={{.+}}-android{{(eabi)?(21|22|23|24|25|26|27|28)}}
 
 #include <ctime>
 #include <type_traits>

@@ -8,12 +8,16 @@
 
 #include "src/stdlib/atol.h"
 #include "src/__support/common.h"
-#include "src/__support/str_conv_utils.h"
+#include "src/__support/str_to_integer.h"
 
 namespace __llvm_libc {
 
 LLVM_LIBC_FUNCTION(long, atol, (const char *str)) {
-  return internal::strtointeger<long>(str, nullptr, 10);
+  auto result = internal::strtointeger<long>(str, 10);
+  if (result.has_error())
+    errno = result.error;
+
+  return result;
 }
 
 } // namespace __llvm_libc

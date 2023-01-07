@@ -11,9 +11,8 @@
 #include "InputChunks.h"
 #include "InputElement.h"
 #include "WriterUtils.h"
-#include "lld/Common/ErrorHandler.h"
-#include "lld/Common/Memory.h"
-#include "llvm/ADT/SetVector.h"
+#include "lld/Common/CommonLinkerContext.h"
+#include <optional>
 
 #define DEBUG_TYPE "lld"
 
@@ -63,7 +62,7 @@ void SymbolTable::addFile(InputFile *file) {
 // using LLVM functions and replaces bitcode symbols with the results.
 // Because all bitcode files that the program consists of are passed
 // to the compiler at once, it can do whole-program optimization.
-void SymbolTable::addCombinedLTOObject() {
+void SymbolTable::compileBitcodeFiles() {
   // Prevent further LTO objects being included
   BitcodeFile::doneLTO = true;
 
@@ -113,6 +112,7 @@ std::pair<Symbol *, bool> SymbolTable::insertName(StringRef name) {
   sym->canInline = true;
   sym->traced = trace;
   sym->forceExport = false;
+  sym->referenced = !config->gcSections;
   symVector.emplace_back(sym);
   return {sym, true};
 }
@@ -144,7 +144,7 @@ static bool signatureMatches(FunctionSymbol *existing,
                              const WasmSignature *newSig) {
   const WasmSignature *oldSig = existing->signature;
 
-  // If either function is missing a signature (this happend for bitcode
+  // If either function is missing a signature (this happens for bitcode
   // symbols) then assume they match.  Any mismatch will be reported later
   // when the LTO objects are added.
   if (!newSig || !oldSig)
@@ -462,8 +462,9 @@ Symbol *SymbolTable::addDefinedTable(StringRef name, uint32_t flags,
 // become available when the LTO object is read.  In this case we silently
 // replace the empty attributes with the valid ones.
 template <typename T>
-static void setImportAttributes(T *existing, Optional<StringRef> importName,
-                                Optional<StringRef> importModule,
+static void setImportAttributes(T *existing,
+                                std::optional<StringRef> importName,
+                                std::optional<StringRef> importModule,
                                 uint32_t flags, InputFile *file) {
   if (importName) {
     if (!existing->importName)
@@ -493,8 +494,8 @@ static void setImportAttributes(T *existing, Optional<StringRef> importName,
 }
 
 Symbol *SymbolTable::addUndefinedFunction(StringRef name,
-                                          Optional<StringRef> importName,
-                                          Optional<StringRef> importModule,
+                                          std::optional<StringRef> importName,
+                                          std::optional<StringRef> importModule,
                                           uint32_t flags, InputFile *file,
                                           const WasmSignature *sig,
                                           bool isCalledDirectly) {
@@ -578,8 +579,8 @@ Symbol *SymbolTable::addUndefinedData(StringRef name, uint32_t flags,
 }
 
 Symbol *SymbolTable::addUndefinedGlobal(StringRef name,
-                                        Optional<StringRef> importName,
-                                        Optional<StringRef> importModule,
+                                        std::optional<StringRef> importName,
+                                        std::optional<StringRef> importModule,
                                         uint32_t flags, InputFile *file,
                                         const WasmGlobalType *type) {
   LLVM_DEBUG(dbgs() << "addUndefinedGlobal: " << name << "\n");
@@ -602,8 +603,8 @@ Symbol *SymbolTable::addUndefinedGlobal(StringRef name,
 }
 
 Symbol *SymbolTable::addUndefinedTable(StringRef name,
-                                       Optional<StringRef> importName,
-                                       Optional<StringRef> importModule,
+                                       std::optional<StringRef> importName,
+                                       std::optional<StringRef> importModule,
                                        uint32_t flags, InputFile *file,
                                        const WasmTableType *type) {
   LLVM_DEBUG(dbgs() << "addUndefinedTable: " << name << "\n");
@@ -626,8 +627,8 @@ Symbol *SymbolTable::addUndefinedTable(StringRef name,
 }
 
 Symbol *SymbolTable::addUndefinedTag(StringRef name,
-                                     Optional<StringRef> importName,
-                                     Optional<StringRef> importModule,
+                                     std::optional<StringRef> importName,
+                                     std::optional<StringRef> importModule,
                                      uint32_t flags, InputFile *file,
                                      const WasmSignature *sig) {
   LLVM_DEBUG(dbgs() << "addUndefinedTag: " << name << "\n");
@@ -843,7 +844,7 @@ InputFunction *SymbolTable::replaceWithUnreachable(Symbol *sym,
 void SymbolTable::replaceWithUndefined(Symbol *sym) {
   // Add a synthetic dummy for weak undefined functions.  These dummies will
   // be GC'd if not used as the target of any "call" instructions.
-  StringRef debugName = saver.save("undefined_weak:" + toString(*sym));
+  StringRef debugName = saver().save("undefined_weak:" + toString(*sym));
   replaceWithUnreachable(sym, *sym->getSignature(), debugName);
   // Hide our dummy to prevent export.
   sym->setHidden(true);
@@ -854,8 +855,8 @@ void SymbolTable::replaceWithUndefined(Symbol *sym) {
 // will abort at runtime, so that relocations can still provided an operand to
 // the call instruction that passes Wasm validation.
 void SymbolTable::handleWeakUndefines() {
-  for (Symbol *sym : getSymbols()) {
-    if (sym->isUndefWeak()) {
+  for (Symbol *sym : symbols()) {
+    if (sym->isUndefWeak() && sym->isUsedInRegularObj) {
       if (sym->getSignature()) {
         replaceWithUndefined(sym);
       } else {
@@ -941,7 +942,8 @@ void SymbolTable::handleSymbolVariants() {
       if (symbol != defined) {
         auto *f = cast<FunctionSymbol>(symbol);
         reportFunctionSignatureMismatch(symName, f, defined, false);
-        StringRef debugName = saver.save("signature_mismatch:" + toString(*f));
+        StringRef debugName =
+            saver().save("signature_mismatch:" + toString(*f));
         replaceWithUnreachable(f, *f->signature, debugName);
       }
     }
